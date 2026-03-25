@@ -12,7 +12,7 @@ class Env {
 	}
 
 	init() {
-		globalThis.dd = globalThis.wx = globalThis.qd = globalApi;
+		globalThis.dd = globalThis.wx = globalApi;
 		globalThis.modRequire = modRequire
 		globalThis.modDefine = modDefine
 		globalThis.global = {}
