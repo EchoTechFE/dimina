@@ -3,8 +3,9 @@
 // https://developers.weixin.qq.com/miniprogram/dev/component/button.html
 // https://github.com/Tencent/weui/blob/master/src/example/button/button_default.html
 
+import { createApp, h, ref } from 'vue'
 import { sleep } from '@dimina/common'
-import { triggerEvent, useInfo } from '@/common/events'
+import { triggerEvent, useInfo, invokeAPI } from '@/common/events'
 
 const props = defineProps({
 	/**
@@ -134,6 +135,66 @@ const isActive = ref(false)
 const info = useInfo()
 const handleFormEvent = inject('formEvent', undefined)
 function handleClicked(event) {
+	if (props.openType) {
+		const applyMap = {
+				'contact': () => {},
+				'liveActivity': () => {},
+				'share': () => {
+					// 插入一个抽屉组件，模拟分享功能
+					const container = document.createElement('div')
+					document.body.appendChild(container)
+
+					const app = createApp({
+						setup() {
+							const show = ref(true)
+							return () => h(Drawer, {
+								show: show.value,
+								'onUpdate:show': (val) => {
+									show.value = val
+									if (!val) {
+										setTimeout(() => {
+											app.unmount()
+											container.remove()
+										}, 300)
+									}
+								},
+								position: 'bottom',
+								round: true,
+							}, {
+								default: () => h('div', {
+									style: {
+										height: '300px',
+										display: 'flex',
+										alignItems: 'center',
+										justifyContent: 'center',
+										backgroundColor: '#fff',
+									},
+								}, '分享面板'),
+							})
+						},
+					})
+					app.mount(container)
+					return
+				},
+				'getPhoneNumber': () => {},
+				'getRealtimePhoneNumber': () => {},
+				'getUserInfo': () => {
+					// 原生组件的 open-type 事件会冒泡到组件上，所以这里直接触发事件，外部监听即可
+					alert(JSON.stringify({method: props.openType, event, info }))
+					invokeAPI(props.openType, { event, info })
+					return
+				},
+				'launchApp': () => {},
+				'openSetting': () => {},
+				'feedback': () => {},
+				'chooseAvatar': () => {},
+				'agreePrivacyAuthorization': () => {},
+		}
+		if(applyMap[props.openType]){
+			applyMap[props.openType].call()
+		}
+		return
+	}
 	if (!props.disabled) {
 		if (props.hoverStopPropagation) {
 			event.stopPropagation()
