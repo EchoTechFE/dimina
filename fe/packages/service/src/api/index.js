@@ -1,4 +1,5 @@
 import { invokeAPI } from '@/api/common'
+import { wrapContext, isContextDescriptor } from '@/api/common/context'
 
 const apiInfo = import.meta.glob('./core/**/index.js', { eager: true })
 const api = {}
@@ -23,7 +24,11 @@ const handler = {
 
 		// API 不存在则返回一个函数，通过消息通道调用
 		return (...args) => {
-			return invokeAPI(prop, ...args)
+			const result = invokeAPI(prop, ...args)
+			if (isContextDescriptor(result)) {
+				return wrapContext(result)
+			}
+			return result
 		}
 	},
 	set(target, prop, value, receiver) {
