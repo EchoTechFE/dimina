@@ -12,18 +12,19 @@ kotlin {
 }
 
 android {
-    namespace = "com.didi.dimina.demo"
+    namespace = "h5.cactus.echo"
     compileSdk = 35
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
-        applicationId = "com.didi.dimina.demo"
+        applicationId = "h5.cactus.echo"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
+
         // Only include ARM architectures
         ndk {
             abiFilters.add("arm64-v8a")

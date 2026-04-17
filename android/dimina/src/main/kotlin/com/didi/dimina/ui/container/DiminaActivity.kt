@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -67,6 +68,7 @@ import com.didi.dimina.bean.AppConfig
 import com.didi.dimina.bean.BridgeOptions
 import com.didi.dimina.bean.MergedPageConfig
 import com.didi.dimina.bean.MiniProgram
+import com.didi.dimina.bean.PathInfo
 import com.didi.dimina.common.LogUtils
 import com.didi.dimina.common.PathUtils
 import com.didi.dimina.common.Utils
@@ -79,6 +81,7 @@ import com.didi.dimina.ui.view.ContactPicker
 import com.didi.dimina.ui.view.DiminaWebView
 import com.didi.dimina.ui.view.MediaPickerRoot
 import com.didi.dimina.ui.view.MediaType
+import com.didi.dimina.bean.TabBarConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -113,12 +116,24 @@ class DiminaActivity : ComponentActivity() {
     private val mediaType = mutableStateOf(MediaType.NONE)
     private val maxImageCount = mutableIntStateOf(1)
 
+    // TabBar state
+    private var tabBarConfig = mutableStateOf<TabBarConfig?>(null)
+    private val selectedTabIndex = mutableIntStateOf(0)
+    private val tabBarPagePaths = mutableSetOf<String>()
+    private var currentTabPath = mutableStateOf<String?>(null)
+    private var configLoaded = mutableStateOf(false)
+
+    // TabBar page instances (multiple WebViews for state preservation)
+    private val tabBarWebViews = mutableMapOf<String, WebView>()
+    private val tabBarBridges = mutableMapOf<String, Bridge>()
+
     // WebView初始化完成后的回调列表
     private val webViewReadyCallbacks = mutableListOf<(WebView) -> Unit>()
 
     // 页面加载完成回调
     private var pageReadyCallback: (() -> Unit)? = null
 
+    // Current active WebView and bridge (may be tabBar or regular page)
     private var webView: WebView? = null
     private var bridge: Bridge? = null
 
@@ -375,31 +390,52 @@ class DiminaActivity : ComponentActivity() {
 
             // 切换到主线程设置UI
             withContext(Dispatchers.Main) {
-                // 4.设置标题栏以及状态栏颜色模式
+                // 4.设置 TabBar 配置（如果存在）
+                val hasTabBar = appConfig.app.tabBar != null
+                appConfig.app.tabBar?.let { config ->
+                    tabBarConfig.value = config
+                    tabBarPagePaths.clear()
+                    tabBarPagePaths.addAll(config.list.map { it.pagePath })
+                    LogUtils.d(tag, "TabBar config loaded with ${config.list.size} tabs")
+
+                    // Set current tab path to entry page (triggers TabBar WebView creation)
+                    currentTabPath.value = pathInfo.pagePath
+                }
+
+                // 5.设置标题栏以及状态栏颜色模式
                 setInitialStyle(mergedPageConfig)
 
-                withWebView { webView ->
-                    // 5.创建通信 bridge
-                    val entryPageBridge = createBridge(
-                        BridgeOptions(
-                            pathInfo = pathInfo,
-                            scene = 1001,
-                            jscore = miniApp.getJsCore(appId, this@DiminaActivity),
-                            webview = webView,
-                            isRoot = true,
-                            root = pageConfig?.root ?: "main",
-                            appId = miniProgram.appId,
-                            pages = appConfig.app.pages,
-                            configInfo = mergedPageConfig
-                        )
-                    )
-                    // Add bridge to MiniApp's bridge list for this appId
-                    miniApp.addBridge(miniProgram.appId, entryPageBridge)
+                // Mark config as loaded to trigger WebView creation
+                configLoaded.value = true
 
-                    withWebViewPageLoaded {
-                        LogUtils.d(tag, "Page loaded, starting bridge")
-                        entryPageBridge.start()
+                // 6.创建通信 bridge
+                // Important: For TabBar apps, don't create bridge here!
+                // The TabBar WebView onInitReady will create the bridge when WebView is ready
+                if (!hasTabBar) {
+                    withWebView { webView ->
+                        val entryPageBridge = createBridge(
+                            BridgeOptions(
+                                pathInfo = pathInfo,
+                                scene = 1001,
+                                jscore = miniApp.getJsCore(appId, this@DiminaActivity),
+                                webview = webView,
+                                isRoot = true,
+                                root = pageConfig?.root ?: "main",
+                                appId = miniProgram.appId,
+                                pages = appConfig.app.pages,
+                                configInfo = mergedPageConfig
+                            )
+                        )
+                        // Add bridge to MiniApp's bridge list for this appId
+                        miniApp.addBridge(miniProgram.appId, entryPageBridge)
+
+                        withWebViewPageLoaded {
+                            LogUtils.d(tag, "Page loaded, starting bridge")
+                            entryPageBridge.start()
+                        }
                     }
+                } else {
+                    LogUtils.d(tag, "TabBar app detected, bridge will be created when TabBar WebView is ready")
                 }
             }
         }
@@ -718,6 +754,19 @@ class DiminaActivity : ComponentActivity() {
                     )
                 }
             },
+            bottomBar = {
+                // Show TabBar if config exists and not loading
+                if (!isLoading.value && tabBarConfig.value != null) {
+                    TabBarView(
+                        tabBarConfig = tabBarConfig.value!!,
+                        selectedIndex = selectedTabIndex.intValue,
+                        onTabSelected = { index ->
+                            val targetPath = tabBarConfig.value!!.list[index].pagePath
+                            switchTab(targetPath)
+                        }
+                    )
+                }
+            },
             modifier = modifier.fillMaxSize()
         ) { innerPadding ->
             Box(
@@ -726,11 +775,109 @@ class DiminaActivity : ComponentActivity() {
                     .padding(top = innerPadding.calculateTopPadding())
                     .background(bgColor)
             ) {
-                // 始终创建DiminaWebView
-                DiminaWebView(
-                    onInitReady = { webView -> onWebViewReady(webView) },
-                    onPageCompleted = { onPageReady() },
-                )
+                // Only create WebViews after config is loaded to avoid initial WebView disposal
+                if (configLoaded.value) {
+                    // If tabBar is enabled, create multiple WebViews for each tab
+                    if (tabBarConfig.value != null) {
+                        // Create a WebView for each tabBar page
+                        tabBarConfig.value?.list?.forEach { tabItem ->
+                        val isVisible = currentTabPath.value == tabItem.pagePath
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(
+                                    if (isVisible) Modifier else Modifier.alpha(0f)
+                                )
+                        ) {
+                            DiminaWebView(
+                                onInitReady = { webView ->
+                                    LogUtils.d(tag, "TabBar WebView onInitReady: ${tabItem.pagePath}, isVisible: $isVisible")
+                                    tabBarWebViews[tabItem.pagePath] = webView
+                                    if (isVisible) {
+                                        try {
+                                            LogUtils.d(tag, "Setting up visible tab: ${tabItem.pagePath}")
+                                            onWebViewReady(webView)
+
+                                            // Create bridge for this tab if not exists
+                                            if (tabBarBridges[tabItem.pagePath] == null) {
+                                                LogUtils.d(tag, "Creating initial bridge for visible tab: ${tabItem.pagePath}")
+
+                                                // tabItem.pagePath is already a path like "pages/index/index"
+                                                // Create PathInfo with null query (no query params)
+                                                val pathInfo = PathInfo(pagePath = tabItem.pagePath, query = null)
+                                                val pageConfig = appConfig.modules[tabItem.pagePath]
+                                                val mergedPageConfig = Utils.mergePageConfig(appConfig.app, pageConfig)
+
+                                                LogUtils.d(tag, "Bridge options - pathInfo: $pathInfo, root: ${pageConfig?.root ?: "main"}")
+
+                                                val options = BridgeOptions(
+                                                    pathInfo = pathInfo,
+                                                    scene = 1001,
+                                                    jscore = miniApp.getJsCore(miniProgram.appId, this@DiminaActivity),
+                                                    webview = webView,
+                                                    isRoot = true,
+                                                    root = pageConfig?.root ?: "main",
+                                                    appId = miniProgram.appId,
+                                                    pages = appConfig.app.pages,
+                                                    configInfo = mergedPageConfig
+                                                )
+
+                                                LogUtils.d(tag, "Creating Bridge instance...")
+                                                val newBridge = Bridge(options = options, parent = this@DiminaActivity)
+
+                                                LogUtils.d(tag, "Initializing Bridge...")
+                                                newBridge.init(false)
+
+                                                // Store bridge in cache, but DON'T set global bridge yet
+                                                // Will be set and started in onPageCompleted
+                                                tabBarBridges[tabItem.pagePath] = newBridge
+                                                miniApp.addBridge(miniProgram.appId, newBridge)
+
+                                                LogUtils.d(tag, "Bridge created and cached for: ${tabItem.pagePath} (not started yet)")
+                                            } else {
+                                                LogUtils.d(tag, "Bridge already exists for: ${tabItem.pagePath}")
+                                            }
+                                        } catch (e: Exception) {
+                                            LogUtils.e(tag, "Error creating bridge for TabBar page: ${tabItem.pagePath} - ${e.message}")
+                                            e.printStackTrace()
+                                        }
+                                    }
+                                },
+                                onPageCompleted = {
+                                    LogUtils.d(tag, "TabBar WebView onPageCompleted: ${tabItem.pagePath}, isVisible: $isVisible")
+                                    if (isVisible) {
+                                        try {
+                                            LogUtils.d(tag, "Page completed for visible tab: ${tabItem.pagePath}")
+                                            onPageReady()
+
+                                            // Start bridge after page loaded
+                                            tabBarBridges[tabItem.pagePath]?.let { tabBridge ->
+                                                LogUtils.d(tag, "Starting bridge for tab: ${tabItem.pagePath}")
+                                                bridge = tabBridge
+                                                tabBridge.start()
+                                                LogUtils.d(tag, "Bridge started successfully for: ${tabItem.pagePath}")
+                                            } ?: run {
+                                                LogUtils.w(tag, "No bridge found for tab: ${tabItem.pagePath}")
+                                            }
+                                        } catch (e: Exception) {
+                                            LogUtils.e(tag, "Error starting bridge for TabBar page: ${tabItem.pagePath} - ${e.message}")
+                                            e.printStackTrace()
+                                        }
+                                    }
+                                },
+                                identifier = "tabbar_${tabItem.pagePath}",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                    } else {
+                        // No tabBar, use single WebView
+                        DiminaWebView(
+                            onInitReady = { webView -> onWebViewReady(webView) },
+                            onPageCompleted = { onPageReady() },
+                        )
+                    }
+                }
 
                 // 加载遮罩层使用 AnimatedVisibility 只添加淡出效果
                 AnimatedVisibility(
@@ -874,6 +1021,105 @@ class DiminaActivity : ComponentActivity() {
             }
         }
     }
+
+    /**
+     * Switch to a tabBar page, closing all non-tabBar pages
+     */
+    fun switchTab(url: String) {
+        runOnUiThread {
+            val pathInfo = Utils.queryPath(url)
+            val pagePath = pathInfo.pagePath
+
+            // Check if the path is a valid tabBar page
+            if (!tabBarPagePaths.contains(pagePath)) {
+                LogUtils.w(tag, "Attempted to switch to non-tabBar page: $pagePath")
+                return@runOnUiThread
+            }
+
+            // Check if already on this tab
+            if (currentTabPath.value == pagePath) {
+                LogUtils.d(tag, "Already on tab: $pagePath")
+                return@runOnUiThread
+            }
+
+            // Update selected tab index
+            tabBarConfig.value?.list?.indexOfFirst { it.pagePath == pagePath }?.let { index ->
+                selectedTabIndex.intValue = index
+            }
+
+            LogUtils.d(tag, "Switching from tab: ${currentTabPath.value} to: $pagePath")
+
+            // Get or create the WebView for this tab
+            val targetWebView = tabBarWebViews[pagePath]
+            val cachedBridge = tabBarBridges[pagePath]
+
+            if (targetWebView != null) {
+                // Switch to the target tab's WebView
+                webView = targetWebView
+                LogUtils.d(tag, "Switched to tab WebView: $pagePath")
+
+                if (cachedBridge != null) {
+                    // Bridge already exists, just switch to it
+                    bridge = cachedBridge
+                    LogUtils.d(tag, "Using cached bridge for tab: $pagePath")
+                } else {
+                    // First time loading this tab, create bridge
+                    LogUtils.d(tag, "Creating new bridge for tab: $pagePath")
+                    val pathInfo = Utils.queryPath(url)
+                    val pageConfig = appConfig.modules[pathInfo.pagePath]
+                    val mergedPageConfig = Utils.mergePageConfig(appConfig.app, pageConfig)
+
+                    setInitialStyle(mergedPageConfig)
+
+                    // Create and initialize bridge for this tab
+                    val options = BridgeOptions(
+                        pathInfo = pathInfo,
+                        scene = 1001,
+                        jscore = miniApp.getJsCore(miniProgram.appId, this),
+                        webview = targetWebView,
+                        isRoot = true,
+                        root = pageConfig?.root ?: "main",
+                        appId = miniProgram.appId,
+                        pages = appConfig.app.pages,
+                        configInfo = mergedPageConfig
+                    )
+                    val newBridge = Bridge(options = options, parent = this)
+                    newBridge.init(false)
+
+                    bridge = newBridge
+                    tabBarBridges[pagePath] = newBridge
+
+                    withWebViewPageLoaded {
+                        newBridge.start()
+                    }
+                }
+            } else {
+                LogUtils.w(tag, "WebView for tab not found: $pagePath")
+            }
+
+            // Update current tab path to trigger UI update
+            currentTabPath.value = pagePath
+            LogUtils.d(tag, "Switched to tab: $pagePath")
+        }
+    }
+
+    /**
+     * Note about TabBar state preservation:
+     *
+     * Android uses a single Activity with single WebView architecture.
+     * Unlike iOS (multi-ViewController) or HarmonyOS (DRouter with multiple pages),
+     * true WebView state preservation requires multiple WebView instances.
+     *
+     * Current implementation:
+     * - Caches Bridge instances for each tabBar page
+     * - Reloads page content when switching (inevitable with single WebView)
+     * - JavaScript state may be preserved in Bridge, but DOM state is reloaded
+     *
+     * For full state preservation (like iOS), we would need:
+     * - Multiple DiminaWebView instances (one per tabBar page)
+     * - Visibility control to show/hide WebViews
+     * - Higher memory usage but better UX
+     */
 
     fun getMiniProgram(): MiniProgram {
         return this.miniProgram

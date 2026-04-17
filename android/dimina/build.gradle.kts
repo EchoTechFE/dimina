@@ -16,13 +16,14 @@ kotlin {
 android {
     namespace = "com.didi.dimina"
     compileSdk = 35
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         minSdk = 26
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
-        
+
         // Only include ARM architectures
         ndk {
             abiFilters.add("arm64-v8a")

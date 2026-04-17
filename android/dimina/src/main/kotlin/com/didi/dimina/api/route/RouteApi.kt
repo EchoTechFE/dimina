@@ -25,9 +25,10 @@ class RouteApi : BaseApiHandler() {
         const val REDIRECT_TO = "redirectTo"
         const val NAVIGATE_BACK = "navigateBack"
         const val RE_LAUNCH = "reLaunch"
+        const val SWITCH_TAB = "switchTab"
     }
 
-    override val apiNames = setOf(NAVIGATE_TO, REDIRECT_TO, NAVIGATE_BACK, RE_LAUNCH)
+    override val apiNames = setOf(NAVIGATE_TO, REDIRECT_TO, NAVIGATE_BACK, RE_LAUNCH, SWITCH_TAB)
 
     override fun handleAction(
         activity: DiminaActivity,
@@ -104,6 +105,21 @@ class RouteApi : BaseApiHandler() {
                 )
                 AsyncResult(JSONObject().apply {
                     put("errMsg", "$RE_LAUNCH:ok")
+                })
+            }
+
+            // Switch to a tabBar page, closing all non-tabBar pages
+            SWITCH_TAB -> {
+                val url = params.optString("url", "")
+                if (url.isEmpty()) {
+                    return ApiUtils.createErrorResponse(apiName, "URL cannot be empty")
+                }
+
+                // Notify activity to switch tab
+                activity.switchTab(url)
+
+                AsyncResult(JSONObject().apply {
+                    put("errMsg", "$SWITCH_TAB:ok")
                 })
             }
 

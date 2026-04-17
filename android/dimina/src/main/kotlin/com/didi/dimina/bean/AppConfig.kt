@@ -43,8 +43,8 @@ data class TabBarConfig(
 @Serializable
 data class TabBarItem(
     val pagePath: String,
-    val iconPath: String,
-    val selectedIconPath: String,
+    val iconPath: String? = null,
+    val selectedIconPath: String? = null,
     val text: String
 )
 
