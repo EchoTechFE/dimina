@@ -97,11 +97,11 @@ export class RequestCallback {
     const bundleManager = app!.bundleManager;
     const bundleInfo = bundleManager.getBundleInfo();
     const appId = bundleInfo.appId;
-    if (url.startsWith('http://127.0.0.1/')) {
+    if (url.startsWith('https://mpservice.qiandao.com/')) {
       const isFromAppBundle = url.includes(appId);
       const processUrl = isFromAppBundle
-        ? url.replace(`http://127.0.0.1/${appId}/`, '')
-        : url.replace('http://127.0.0.1/', '');
+        ? url.replace(`https://mpservice.qiandao.com/${appId}/`, '')
+        : url.replace('https://mpservice.qiandao.com/', '');
       const sandboxDir = isFromAppBundle
         ? bundleManager.getCurrentJSAppDir()
         : bundleManager.getCurrentJSSdkDir();
