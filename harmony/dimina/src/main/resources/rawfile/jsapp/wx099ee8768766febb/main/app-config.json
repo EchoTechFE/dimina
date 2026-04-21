@@ -1,0 +1,63 @@
+{
+    "app": {
+        "pages": [
+            "pages/index/index",
+            "pages/second/index",
+            "pages/tabs-demo/index",
+            "pages/nav-test/index"
+        ],
+        "window": {
+            "backgroundTextStyle": "light",
+            "navigationBarBackgroundColor": "#fff",
+            "navigationBarTitleText": "WeChat",
+            "navigationBarTextStyle": "black"
+        },
+        "tabBar": {
+            "color": "#999999",
+            "selectedColor": "#1890ff",
+            "backgroundColor": "#ffffff",
+            "borderStyle": "black",
+            "list": [
+                {
+                    "pagePath": "pages/index/index",
+                    "text": "首页"
+                },
+                {
+                    "pagePath": "pages/second/index",
+                    "text": "第二页"
+                },
+                {
+                    "pagePath": "pages/tabs-demo/index",
+                    "text": "Tabs 演示"
+                }
+            ]
+        }
+    },
+    "modules": {
+        "pages/index/index": {
+            "navigationBarTitleText": "首页",
+            "usingComponents": {
+                "comp": "/comp"
+            }
+        },
+        "pages/second/index": {
+            "navigationBarTitleText": "第二页",
+            "usingComponents": {
+                "comp": "/comp"
+            }
+        },
+        "pages/tabs-demo/index": {
+            "navigationBarTitleText": "Tabs 组件演示",
+            "usingComponents": {
+                "comp": "/comp"
+            }
+        },
+        "pages/nav-test/index": {
+            "navigationBarTitleText": "导航测试",
+            "usingComponents": {
+                "comp": "/comp"
+            }
+        }
+    },
+    "projectName": "tmp"
+}
