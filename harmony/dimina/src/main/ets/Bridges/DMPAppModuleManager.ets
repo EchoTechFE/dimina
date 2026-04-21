@@ -31,6 +31,7 @@ import { DMPContainerBridgesModuleNavigateToMiniProgram } from './DMPContainerBr
 import { DMPApp } from '../DApp/DMPApp';
 import { DMPContainerBridgesModuleBluetooth } from './DMPContainerBridgesModule+Bluetooth';
 import { DMPContainerBridgesModuleVideo } from './DMPContainerBridgesModule+Video';
+import { DMPContainerBridgesModuleFileSystem } from './DMPContainerBridgesModule+FileSystem';
 
 
 export class DMPAppModuleManager extends DMPModuleManager {
@@ -78,6 +79,7 @@ export class DMPAppModuleManager extends DMPModuleManager {
     this.registerModule(new DMPContainerBridgesModuleScroll(app))
     this.registerModule(new DMPContainerBridgesModuleNavigationBar(app))
     this.registerModule(new DMPContainerBridgesModuleNavigateToMiniProgram(app))
+    this.registerModule(new DMPContainerBridgesModuleFileSystem(app))
   }
 }
 

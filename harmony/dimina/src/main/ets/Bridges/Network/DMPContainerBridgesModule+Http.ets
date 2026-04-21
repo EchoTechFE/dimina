@@ -13,15 +13,53 @@ export class DMPContainerBridgesModuleHttp extends DMPContainerBridgesModule {
 
   request(data: DMPMap, callback: DMPBridgeCallback) {
     const service = new DMPNetServiceNext(data, this.appData.appId, this.appData.jsAppVersion);
+    const url: string = data.get('url')
+
+    console.log(`[HTTP Bridge] ========== 开始请求 ==========`)
+    console.log(`[HTTP Bridge] URL: ${url}`)
+    console.log(`[HTTP Bridge] Method: ${data.get('method') || 'GET'}`)
+    console.log(`[HTTP Bridge] Headers: ${JSON.stringify(data.get('header') || {})}`)
+    console.log(`[HTTP Bridge] Data: ${JSON.stringify(data.get('data') || {})}`)
 
     service.request()
       .then(res => {
+        console.log(`[HTTP Bridge] 请求成功: ${url}`)
+        console.log(`[HTTP Bridge] 响应状态码: ${res.get('statusCode')}`)
+
+        const responseData: object | string = res.get('data')
+        console.log(`[HTTP Bridge] 响应数据类型: ${typeof responseData}`)
+
+        if (responseData && typeof responseData === 'object') {
+          const keys: string[] = Object.keys(responseData)
+          console.log(`[HTTP Bridge] 响应数据字段: ${keys.join(', ')}`)
+
+          // 特别记录 cast-selector 配置的详细信息
+          if (url.includes('cast-selector')) {
+            console.log(`[HTTP Bridge] 配置请求详情:`)
+            console.log(`[HTTP Bridge]   - data 类型: ${typeof responseData}`)
+            console.log(`[HTTP Bridge]   - data 字段数: ${keys.length}`)
+            console.log(`[HTTP Bridge]   - 完整响应结构: statusCode=${res.get('statusCode')}, has data=${res.get('data') !== undefined}, has header=${res.get('header') !== undefined}`)
+
+            // 尝试输出部分数据内容
+            try {
+              const dataStr = JSON.stringify(responseData)
+              console.log(`[HTTP Bridge]   - data 前200字符: ${dataStr.substring(0, 200)}`)
+            } catch (e) {
+              console.error(`[HTTP Bridge]   - 无法序列化 data: ${e}`)
+            }
+          }
+        }
+
         this.invokeSuccessCallback(callback, res)
       })
       .catch((err: Error) => {
+        console.error(`[HTTP Bridge] 请求失败: ${url}`)
+        console.error(`[HTTP Bridge] 错误信息: ${err.message}`)
+        console.error(`[HTTP Bridge] 错误堆栈: ${err.stack}`)
         this.invokeFailureCallback(callback, null, err.message)
       })
   }
+
 
 
   getNameFromFile(path: string): string {
