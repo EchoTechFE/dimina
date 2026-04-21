@@ -1,13 +1,27 @@
 import fs from 'node:fs'
-import { resolve, sep } from 'node:path'
+import path from 'node:path'
 import { isMainThread, parentPort } from 'node:worker_threads'
-import { parseSync } from 'oxc-parser'
-import { walk } from 'oxc-walker'
+import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import MagicString from 'magic-string'
 import { transform } from 'esbuild'
 import { collectAssets, hasCompileInfo } from '../common/utils.js'
-import { getAppConfigInfo, getAppId, getComponent, getContentByPath, getNpmResolver, getTargetPath, getWorkPath, resetStoreInfo, resolveAppAlias } from '../env.js'
-import { mergeSourcemap, remapSourcemap } from './sourcemap.js'
+import {
+	getAppConfigInfo,
+	getAppId,
+	getComponent,
+	getContentByPath,
+	getNpmResolver,
+	getTargetPath,
+	getWorkPath,
+	resetStoreInfo,
+	resolveAppAlias,
+} from '../env.js'
+import { mergeSourcemap, remapSourcemap, wrapModDefine } from './sourcemap.js'
+
+const SCRIPT_EXTENSIONS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']
+const TYPE_SCRIPT_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts'])
+const FRAMEWORK_TYPES_FILE = fileURLToPath(new URL('./logic-compiler-globals.d.ts', import.meta.url))
 
 // 用于缓存已处理的模块
 const processedModules = new Set()
@@ -15,11 +29,14 @@ const processedModules = new Set()
 // 是否生成 sourcemap
 let enableSourcemap = false
 
+let compilerState = null
+
 if (!isMainThread) {
 	parentPort.on('message', async ({ pages, storeInfo, sourcemap }) => {
 		try {
 			resetStoreInfo(storeInfo)
 			enableSourcemap = !!sourcemap
+			compilerState = createCompilerState()
 
 			const progress = {
 				_completedTasks: 0,
@@ -49,26 +66,57 @@ if (!isMainThread) {
 				}
 			}
 			await writeCompileRes(mainCompileRes, null)
+			writeDeclarationOutputs()
 
 			// Worker 任务完成后清理缓存，释放内存
-			processedModules.clear()
+			clearCompilerState()
 
 			parentPort.postMessage({ success: true })
 		}
 		catch (error) {
 			// 错误时也清理缓存
-			processedModules.clear()
+			clearCompilerState()
 
 			parentPort.postMessage({
 				success: false,
 				error: {
 					message: error.message,
 					stack: error.stack,
-					name: error.name
-				}
+					name: error.name,
+				},
 			})
 		}
 	})
+}
+
+function createCompilerState() {
+	return {
+		workPath: getWorkPath(),
+		tsConfig: null,
+		tsProgram: null,
+		tsProgramRootNames: [],
+		tsProgramVersion: 0,
+		checkedDiagnosticsVersion: -1,
+		emittedModules: new Map(),
+		discoveredTypeScriptFiles: new Set(),
+		declarationOutputs: new Map(),
+		moduleResolutionHost: null,
+	}
+}
+
+function clearCompilerState() {
+	processedModules.clear()
+	enableSourcemap = false
+	compilerState = null
+}
+
+function ensureCompilerState() {
+	const workPath = getWorkPath()
+	if (!compilerState || compilerState.workPath !== workPath) {
+		processedModules.clear()
+		compilerState = createCompilerState()
+	}
+	return compilerState
 }
 
 async function writeCompileRes(compileRes, root) {
@@ -94,10 +142,8 @@ async function writeCompileRes(compileRes, root) {
 	else {
 		let mergeCode = ''
 		for (const module of compileRes) {
-			const amdFormat = `modDefine('${module.path}', function(require, module, exports) {
-${module.code}
-});`
-			//TODO: 替换成 https://oxc.rs/docs/guide/usage/minifier.html
+			const { header, code, footer } = wrapModDefine(module)
+			const amdFormat = `${header}${code}${footer}`
 			const { code: minifiedCode } = await transform(amdFormat, {
 				minify: true,
 				target: ['es2023'], // quickjs 支持版本
@@ -109,10 +155,25 @@ ${module.code}
 	}
 }
 
+function writeDeclarationOutputs() {
+	if (!compilerState?.declarationOutputs.size) {
+		return
+	}
+
+	const declarationRoot = path.join(getTargetPath(), 'types')
+	for (const [relativeFilePath, content] of compilerState.declarationOutputs) {
+		const outputPath = path.join(declarationRoot, relativeFilePath)
+		fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+		fs.writeFileSync(outputPath, content)
+	}
+}
+
 /**
- * 编译 js 文件
+ * 编译 js / ts 文件
  */
 async function compileJS(pages, root, mainCompileRes, progress) {
+	ensureCompilerState()
+
 	const compileRes = []
 	if (!root) {
 		await buildJSByPath(root, { path: 'app' }, compileRes, mainCompileRes, false)
@@ -127,49 +188,51 @@ async function compileJS(pages, root, mainCompileRes, progress) {
 }
 
 async function buildJSByPath(packageName, module, compileRes, mainCompileRes, addExtra, depthChain = [], putMain = false) {
-	// Track dependency chain to detect potential circular dependencies
+	ensureCompilerState()
+
 	const currentPath = module.path
 
-	// Circular dependency detected
 	if (depthChain.includes(currentPath)) {
 		console.warn('[logic]', `检测到循环依赖: ${[...depthChain, currentPath].join(' -> ')}`)
 		return
 	}
-	// Deep dependency chain detected
 	if (depthChain.length > 20) {
 		console.warn('[logic]', `检测到深度依赖: ${[...depthChain, currentPath].join(' -> ')}`)
 		return
 	}
+
 	depthChain = [...depthChain, currentPath]
 	if (!module.path) {
-		// 业务逻辑不存在
 		return
 	}
-	// 防止添加相同的 js
 	if (hasCompileInfo(module.path, compileRes, mainCompileRes)) {
 		return
 	}
-	const compileInfo = {
-		path: module.path,
-		code: '',
-		sourceFile: null,
-	}
 
 	const src = module.path.startsWith('/') ? module.path : `/${module.path}`
-	const modulePath = getJSAbsolutePath(src)
+	const modulePath = getScriptAbsolutePath(src)
 	if (!modulePath) {
+		if (module.path === 'app') {
+			return
+		}
 		console.warn('[logic]', `找不到模块文件: ${src}`)
 		return
 	}
-	
+
 	const sourceCode = getContentByPath(modulePath)
 	if (!sourceCode) {
 		console.warn('[logic]', `无法读取模块文件: ${modulePath}`)
 		return
 	}
-	const isTypeScript = modulePath.endsWith('.ts')
 
-	// 记录源文件路径，用于 sourcemap
+	const compileInfo = {
+		path: module.path,
+		code: '',
+		map: null,
+		sourceFile: null,
+		extraInfoCode: addExtra ? buildExtraInfoCode(module) : '',
+	}
+
 	if (enableSourcemap) {
 		const workPath = getWorkPath()
 		compileInfo.sourceFile = modulePath.startsWith(workPath)
@@ -177,39 +240,24 @@ async function buildJSByPath(packageName, module, compileRes, mainCompileRes, ad
 			: src
 	}
 
-	// 使用 oxc-parser 解析代码
-	const parseResult = parseSync(modulePath, sourceCode, {
-		sourceType: 'module',
-		lang: isTypeScript ? 'ts' : 'js'
-	})
-	const ast = parseResult.program
-	
-	// 使用 MagicString 进行代码修改
-	const s = new MagicString(sourceCode)
-
-	// 构建 extraInfo 对象（使用 JSON 而不是 AST）
-	const extraInfo = {
-		path: module.path
+	if (putMain) {
+		mainCompileRes.push(compileInfo)
+	}
+	else {
+		compileRes.push(compileInfo)
 	}
 
-	// https://developers.weixin.qq.com/miniprogram/dev/framework/custom-component/
-	// 将 component 字段设为 true 可将这一组文件设为自定义组件
-	if (module.component) {
-		extraInfo.component = true
+	if (isTypeScriptFile(modulePath)) {
+		compilerState.discoveredTypeScriptFiles.add(modulePath)
 	}
 
 	if (module.usingComponents) {
-		const componentsObj = {}
 		const allSubPackages = getAppConfigInfo().subPackages
 
-		for (const [name, path] of Object.entries(module.usingComponents)) {
+		for (const componentPath of Object.values(module.usingComponents)) {
 			let toMainSubPackage = true
 			if (packageName) {
-				// 如果依赖的组件不在当前的分包，则跳过该组件的编译逻辑，保证分包代码的独立性
-				// 考虑到路径可能是 'test/src' 这样的格式，使用前缀匹配而不是分割比较
-				const normalizedPath = path.startsWith('/') ? path.substring(1) : path
-
-				// 如果不属于任意分包则将逻辑移动到主包
+				const normalizedPath = componentPath.startsWith('/') ? componentPath.substring(1) : componentPath
 				for (const subPackage of allSubPackages) {
 					if (normalizedPath.startsWith(`${subPackage.root}/`)) {
 						toMainSubPackage = false
@@ -221,188 +269,441 @@ async function buildJSByPath(packageName, module, compileRes, mainCompileRes, ad
 				toMainSubPackage = false
 			}
 
-			const componentModule = getComponent(path)
+			const componentModule = getComponent(componentPath)
 			if (!componentModule) {
 				continue
 			}
 
-			await buildJSByPath(packageName, componentModule, compileRes, mainCompileRes, true, depthChain, putMain || toMainSubPackage)
-
-			componentsObj[name] = path
-		}
-		extraInfo.usingComponents = componentsObj
-	}
-
-	// 如果需要添加 extraInfo，在代码开头注入
-	if (addExtra) {
-		const extraInfoCode = `globalThis.__extraInfo = ${JSON.stringify(extraInfo)};\n`
-		if (enableSourcemap) {
-			// 存到 compileInfo，在 modDefine header 中注入，避免影响 sourcemap 行号
-			compileInfo.extraInfoCode = extraInfoCode
-		} else {
-			s.prepend(extraInfoCode)
+			await buildJSByPath(
+				packageName,
+				componentModule,
+				compileRes,
+				mainCompileRes,
+				true,
+				depthChain,
+				putMain || toMainSubPackage,
+			)
 		}
 	}
 
-	if (putMain) {
-		mainCompileRes.push(compileInfo)
-	}
-	else {
-		compileRes.push(compileInfo)
-	}
-
-	// 收集需要修改的路径信息和依赖模块
-	const pathReplacements = []
-	const dependenciesToProcess = []
-
-	walk(ast, {
-		enter(node, parent) {
-			if ((node.type === 'StringLiteral' || node.type === 'Literal') && isLocalAssetString(node.value)) {
-				pathReplacements.push({
-					start: node.start,
-					end: node.end,
-					newValue: collectAssets(getWorkPath(), modulePath, node.value, getTargetPath(), getAppId()),
-				})
-			}
-
-			// 处理 require() 调用
-			if (node.type === 'CallExpression') {
-				// 检查是否是 require() 调用
-				const isRequire = node.callee.type === 'Identifier' && node.callee.name === 'require'
-				const isRequireProperty = node.callee.type === 'MemberExpression' && 
-					node.callee.object?.type === 'Identifier' && 
-					node.callee.object?.name === 'require'
-				
-				if ((isRequire || isRequireProperty) && 
-					node.arguments.length > 0 && 
-					(node.arguments[0].type === 'StringLiteral' || node.arguments[0].type === 'Literal')) {
-					const arg = node.arguments[0]
-					const requirePath = arg.value
-					
-					if (requirePath) {
-						const { id, shouldProcess } = resolveDependencyId(requirePath, modulePath, false)
-						
-						if (shouldProcess) {
-							pathReplacements.push({
-								start: arg.start,
-								end: arg.end,
-								newValue: id
-							})
-							
-							if (!processedModules.has(packageName + id)) {
-								dependenciesToProcess.push(id)
-							}
-						}
-					}
-				}
-			}
-			
-			// 处理 ES6 import 语句
-			if (node.type === 'ImportDeclaration') {
-				const importPath = node.source.value
-				if (importPath) {
-					const { id, shouldProcess } = resolveDependencyId(importPath, modulePath, true)
-					
-					if (shouldProcess) {
-						pathReplacements.push({
-							start: node.source.start,
-							end: node.source.end,
-							newValue: id
-						})
-						
-						if (!processedModules.has(packageName + id)) {
-							dependenciesToProcess.push(id)
-						}
-					}
-				}
-			}
-
-			// 处理 re-export 语句，如 export * from './foo'
-			// 这类语句不会出现在运行时 require 中，必须在这里提前收集依赖。
-			if (
-				(node.type === 'ExportAllDeclaration' || node.type === 'ExportNamedDeclaration')
-				&& node.source
-			) {
-				const exportPath = node.source.value
-				if (exportPath) {
-					const { id, shouldProcess } = resolveDependencyId(exportPath, modulePath, true)
-
-					if (shouldProcess) {
-						pathReplacements.push({
-							start: node.source.start,
-							end: node.source.end,
-							newValue: id,
-						})
-
-						if (!processedModules.has(packageName + id)) {
-							dependenciesToProcess.push(id)
-						}
-					}
-				}
-			}
-		}
+	const emittedModule = await emitModule(modulePath, sourceCode)
+	const postProcessed = await postProcessModuleCode({
+		compileInfo,
+		modulePath,
+		emittedCode: emittedModule.code,
+		emittedMap: emittedModule.map,
+		loader: emittedModule.loader,
 	})
 
-	// 处理所有依赖模块（异步）
-	for (const depId of dependenciesToProcess) {
-		await buildJSByPath(packageName, { path: depId }, compileRes, mainCompileRes, false, depthChain, putMain)
+	compileInfo.code = postProcessed.code
+	compileInfo.map = postProcessed.map
+
+	for (const depId of postProcessed.dependencies) {
+		if (!processedModules.has(packageName + depId)) {
+			await buildJSByPath(packageName, { path: depId }, compileRes, mainCompileRes, false, depthChain, putMain)
+		}
 	}
 
-	// 反向遍历修改，避免位置偏移
-	for (const replacement of pathReplacements.reverse()) {
+	processedModules.add(packageName + currentPath)
+}
+
+function buildExtraInfoCode(module) {
+	const extraInfo = {
+		path: module.path,
+	}
+
+	// https://developers.weixin.qq.com/miniprogram/dev/framework/custom-component/
+	if (module.component) {
+		extraInfo.component = true
+	}
+
+	if (module.usingComponents) {
+		extraInfo.usingComponents = module.usingComponents
+	}
+
+	return `globalThis.__extraInfo = ${JSON.stringify(extraInfo)};\n`
+}
+
+async function emitModule(modulePath, sourceCode) {
+	if (!isTypeScriptFile(modulePath)) {
+		return {
+			code: sourceCode,
+			map: null,
+			loader: isJsxFile(modulePath) ? 'jsx' : 'js',
+		}
+	}
+
+	if (compilerState.emittedModules.has(modulePath)) {
+		return compilerState.emittedModules.get(modulePath)
+	}
+
+	const program = ensureTypeScriptProgram(modulePath)
+	const sourceFile = program.getSourceFile(modulePath)
+	if (!sourceFile) {
+		throw new Error(`[logic] TypeScript Program 未包含源文件: ${modulePath}`)
+	}
+
+	const outputs = {
+		code: null,
+		map: null,
+		loader: 'js',
+	}
+
+	const emitResult = program.emit(sourceFile, (fileName, text, _writeByteOrderMark, _onError, sourceFiles) => {
+		const belongsToCurrentModule = sourceFiles?.some(item => path.resolve(item.fileName) === modulePath)
+		if (!belongsToCurrentModule) {
+			return
+		}
+
+		const normalizedFileName = fileName.replace(/\\/g, '/')
+		if (isDeclarationOutputFile(normalizedFileName) || isDeclarationMapOutputFile(normalizedFileName)) {
+			storeDeclarationOutput(normalizedFileName, text)
+			return
+		}
+
+		if (normalizedFileName.endsWith('.map')) {
+			outputs.map = text
+			return
+		}
+
+		if (/\.(?:[cm]?js|jsx)$/.test(normalizedFileName)) {
+			outputs.code = text
+			outputs.loader = normalizedFileName.endsWith('.jsx') ? 'jsx' : 'js'
+		}
+	}, undefined, false)
+
+	if (emitResult.emitSkipped || !outputs.code) {
+		const diagnostics = [
+			...emitResult.diagnostics,
+			...program.getSyntacticDiagnostics(sourceFile),
+			...program.getSemanticDiagnostics(sourceFile),
+		].filter(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)
+
+		if (diagnostics.length > 0) {
+			throw new Error(formatTypeScriptDiagnostics(diagnostics))
+		}
+		throw new Error(`[logic] TypeScript emit 失败: ${modulePath}`)
+	}
+
+	if (outputs.map) {
+		outputs.map = normalizeTypeScriptSourceMap(outputs.map, modulePath)
+	}
+
+	compilerState.emittedModules.set(modulePath, outputs)
+	return outputs
+}
+
+async function postProcessModuleCode({ compileInfo, modulePath, emittedCode, emittedMap, loader }) {
+	const sourceFile = ts.createSourceFile(
+		modulePath,
+		emittedCode,
+		ts.ScriptTarget.Latest,
+		true,
+		loader === 'jsx' ? ts.ScriptKind.JSX : ts.ScriptKind.JS,
+	)
+
+	const s = new MagicString(emittedCode)
+	const replacements = []
+	const dependencies = []
+
+	const visit = (node) => {
+		if (ts.isStringLiteral(node) && isLocalAssetString(node.text)) {
+			replacements.push({
+				start: node.getStart(sourceFile),
+				end: node.end,
+				newValue: collectAssets(getWorkPath(), modulePath, node.text, getTargetPath(), getAppId()),
+			})
+		}
+
+		if (ts.isCallExpression(node)) {
+			const specifierNode = getCallSpecifierNode(node)
+			if (specifierNode) {
+				const { id, shouldProcess } = resolveDependencyId(specifierNode.text, modulePath)
+				if (shouldProcess) {
+					replacements.push({
+						start: specifierNode.getStart(sourceFile),
+						end: specifierNode.end,
+						newValue: id,
+					})
+					dependencies.push(id)
+				}
+			}
+		}
+
+		if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+			const { id, shouldProcess } = resolveDependencyId(node.moduleSpecifier.text, modulePath)
+			if (shouldProcess) {
+				replacements.push({
+					start: node.moduleSpecifier.getStart(sourceFile),
+					end: node.moduleSpecifier.end,
+					newValue: id,
+				})
+				dependencies.push(id)
+			}
+		}
+
+		ts.forEachChild(node, visit)
+	}
+
+	visit(sourceFile)
+
+	for (const replacement of replacements.reverse()) {
 		s.overwrite(replacement.start, replacement.end, `'${replacement.newValue}'`)
 	}
 
-	const modifiedCode = s.toString()
-	let preEsbuildMap = null
-	if (enableSourcemap && compileInfo.sourceFile) {
-		const generatedMap = JSON.parse(s.generateMap({
+	const rewrittenCode = s.toString()
+	let preEsbuildMap = emittedMap
+	if (enableSourcemap && compileInfo.sourceFile && replacements.length > 0) {
+		const rewrittenMap = JSON.parse(s.generateMap({
 			file: compileInfo.sourceFile,
 			source: compileInfo.sourceFile,
 			includeContent: true,
 			hires: true,
 		}).toString())
-		generatedMap.file = compileInfo.sourceFile
-		generatedMap.sources = [compileInfo.sourceFile]
-		generatedMap.sourcesContent = [sourceCode]
-		preEsbuildMap = JSON.stringify(generatedMap)
+		rewrittenMap.file = compileInfo.sourceFile
+		rewrittenMap.sources = [compileInfo.sourceFile]
+		rewrittenMap.sourcesContent = [emittedCode]
+		preEsbuildMap = emittedMap
+			? remapSourcemap(JSON.stringify(rewrittenMap), emittedMap)
+			: JSON.stringify(rewrittenMap)
 	}
-	
-	// 使用 esbuild 进行最终的 CommonJS 转换和压缩
+
 	try {
 		const esbuildOpts = {
 			format: 'cjs',
 			target: 'es2020',
 			platform: 'neutral',
-			loader: isTypeScript ? 'ts' : 'js',
+			loader,
 		}
-		/*
-		 * 当前 sourcemap 仍是单步产出：
-		 * - JS / TS 都先经过 MagicString 路径重写，再交给 esbuild 生成 map
-		 * - 这样可避免 TS 先被 transpile 成 JS 后再伪装为 .ts 输出 sourcemap
-		 * - 若要精确映射回“路径重写前”的原始源码列号，仍需串联 MagicString.generateMap() 做 remapping
-		 */
 		if (enableSourcemap && compileInfo.sourceFile) {
 			esbuildOpts.sourcemap = true
 			esbuildOpts.sourcefile = compileInfo.sourceFile
 			esbuildOpts.sourcesContent = true
 		}
-		const esbuildResult = await transform(modifiedCode, esbuildOpts)
+		const esbuildResult = await transform(rewrittenCode, esbuildOpts)
 
-		if (enableSourcemap && esbuildResult.map) {
-			compileInfo.map = preEsbuildMap
-				? remapSourcemap(esbuildResult.map, preEsbuildMap)
-				: esbuildResult.map
+		return {
+			code: esbuildResult.code,
+			map: enableSourcemap && esbuildResult.map
+				? (preEsbuildMap ? remapSourcemap(esbuildResult.map, preEsbuildMap) : esbuildResult.map)
+				: null,
+			dependencies: [...new Set(dependencies)],
 		}
-		compileInfo.code = esbuildResult.code
-	} catch (error) {
-		console.error(`[logic] esbuild 转换失败 ${modulePath}:`, error.message)
-		// 如果 esbuild 转换失败，使用路径改写后的源码
-		compileInfo.code = modifiedCode
 	}
-	
-	// 将当前模块标记为已处理
-	processedModules.add(packageName + currentPath)
+	catch (error) {
+		throw new Error(`[logic] esbuild 转换失败 ${modulePath}: ${error.message}`)
+	}
+}
+
+function getCallSpecifierNode(node) {
+	if (
+		(node.expression.kind === ts.SyntaxKind.ImportKeyword
+			|| isRequireLikeExpression(node.expression))
+		&& node.arguments.length > 0
+		&& ts.isStringLiteral(node.arguments[0])
+	) {
+		return node.arguments[0]
+	}
+	return null
+}
+
+function isRequireLikeExpression(expression) {
+	if (ts.isIdentifier(expression)) {
+		return expression.text === 'require'
+	}
+
+	if (ts.isPropertyAccessExpression(expression)) {
+		return ts.isIdentifier(expression.expression)
+			&& expression.expression.text === 'require'
+	}
+
+	return false
+}
+
+function ensureTypeScriptProgram(modulePath) {
+	ensureCompilerState()
+	const rootNames = getTypeScriptProgramRootNames(modulePath)
+	if (!compilerState.tsProgram || !haveSameRootNames(rootNames, compilerState.tsProgramRootNames)) {
+		const config = getTypeScriptConfig()
+		const compilerOptions = getTypeScriptCompilerOptions(config.options)
+		const host = ts.createCompilerHost(compilerOptions, true)
+		compilerState.tsProgram = ts.createProgram({
+			rootNames,
+			options: compilerOptions,
+			projectReferences: config.projectReferences,
+			host,
+		})
+		compilerState.tsProgramRootNames = rootNames
+		compilerState.tsProgramVersion++
+		compilerState.checkedDiagnosticsVersion = -1
+	}
+
+	ensureTypeScriptDiagnostics()
+	return compilerState.tsProgram
+}
+
+function getTypeScriptProgramRootNames(modulePath) {
+	const config = getTypeScriptConfig()
+	compilerState.discoveredTypeScriptFiles.add(modulePath)
+
+	if (config.fileNames.length > 0) {
+		return [...new Set([FRAMEWORK_TYPES_FILE, ...config.fileNames, ...compilerState.discoveredTypeScriptFiles])]
+	}
+
+	return [...new Set([FRAMEWORK_TYPES_FILE, ...compilerState.discoveredTypeScriptFiles])]
+}
+
+function ensureTypeScriptDiagnostics() {
+	if (compilerState.checkedDiagnosticsVersion === compilerState.tsProgramVersion) {
+		return
+	}
+
+	const diagnostics = [
+		...compilerState.tsProgram.getOptionsDiagnostics(),
+		...compilerState.tsProgram.getGlobalDiagnostics(),
+		...compilerState.tsProgram.getSyntacticDiagnostics(),
+		...compilerState.tsProgram.getSemanticDiagnostics(),
+	].filter(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)
+
+	if (diagnostics.length > 0) {
+		throw new Error(formatTypeScriptDiagnostics(diagnostics))
+	}
+
+	compilerState.checkedDiagnosticsVersion = compilerState.tsProgramVersion
+}
+
+function getTypeScriptConfig() {
+	ensureCompilerState()
+
+	if (compilerState.tsConfig) {
+		return compilerState.tsConfig
+	}
+
+	const workPath = getWorkPath()
+	const configPath = ts.findConfigFile(workPath, ts.sys.fileExists, 'tsconfig.json')
+
+	if (!configPath) {
+		compilerState.tsConfig = {
+			options: {},
+			fileNames: [],
+			projectReferences: undefined,
+		}
+		return compilerState.tsConfig
+	}
+
+	const parsed = ts.getParsedCommandLineOfConfigFile(
+		configPath,
+		{},
+		{
+			...ts.sys,
+			onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+				throw new Error(formatTypeScriptDiagnostics([diagnostic]))
+			},
+		},
+	)
+
+	if (!parsed) {
+		throw new Error(`[logic] 解析 tsconfig 失败: ${configPath}`)
+	}
+
+	if (parsed.errors?.length) {
+		throw new Error(formatTypeScriptDiagnostics(parsed.errors))
+	}
+
+	compilerState.tsConfig = {
+		options: parsed.options,
+		fileNames: parsed.fileNames.map(fileName => path.resolve(fileName)),
+		projectReferences: parsed.projectReferences,
+	}
+	return compilerState.tsConfig
+}
+
+function getTypeScriptCompilerOptions(parsedOptions = {}) {
+	return {
+		...parsedOptions,
+		target: parsedOptions.target ?? ts.ScriptTarget.ES2020,
+		module: parsedOptions.module ?? ts.ModuleKind.ESNext,
+		allowJs: parsedOptions.allowJs ?? true,
+		ignoreDeprecations: parsedOptions.ignoreDeprecations ?? '6.0',
+		noEmit: false,
+		emitDeclarationOnly: false,
+		declaration: parsedOptions.declaration ?? parsedOptions.emitDeclarationOnly ?? false,
+		sourceMap: enableSourcemap,
+		inlineSources: enableSourcemap,
+		inlineSourceMap: false,
+	}
+}
+
+function formatTypeScriptDiagnostics(diagnostics) {
+	return ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+		getCanonicalFileName: fileName => fileName,
+		getCurrentDirectory: () => getWorkPath(),
+		getNewLine: () => '\n',
+	})
+}
+
+function normalizeTypeScriptSourceMap(mapText, modulePath) {
+	const map = JSON.parse(mapText)
+	const moduleDir = path.dirname(modulePath)
+
+	map.sources = (map.sources || []).map((source) => {
+		if (!source) {
+			return source
+		}
+
+		let candidatePath = source
+		if (!path.isAbsolute(candidatePath)) {
+			if (map.sourceRoot) {
+				candidatePath = path.resolve(map.sourceRoot, candidatePath)
+			}
+			else {
+				candidatePath = path.resolve(moduleDir, candidatePath)
+			}
+		}
+
+		const normalizedSource = normalizeSourceMapPath(candidatePath)
+		return normalizedSource || source.replace(/\\/g, '/')
+	})
+	map.sourceRoot = ''
+
+	return JSON.stringify(map)
+}
+
+function normalizeSourceMapPath(filePath) {
+	const absolutePath = path.resolve(filePath)
+	const workPath = getWorkPath()
+	if (!absolutePath.startsWith(workPath)) {
+		return null
+	}
+	return `/${path.relative(workPath, absolutePath).replace(/\\/g, '/')}`
+}
+
+function storeDeclarationOutput(fileName, content) {
+	const relativePath = getDeclarationOutputRelativePath(fileName)
+	if (!relativePath) {
+		return
+	}
+	compilerState.declarationOutputs.set(relativePath, content)
+}
+
+function getDeclarationOutputRelativePath(fileName) {
+	const normalized = path.resolve(fileName)
+	const workPath = getWorkPath()
+	const config = getTypeScriptConfig()
+
+	if (normalized.startsWith(workPath)) {
+		return path.relative(workPath, normalized)
+	}
+
+	const outDir = config.options.outDir
+	if (outDir) {
+		const normalizedOutDir = path.resolve(outDir)
+		if (normalized.startsWith(normalizedOutDir)) {
+			return path.relative(normalizedOutDir, normalized)
+		}
+	}
+
+	return null
 }
 
 function isLocalAssetString(value) {
@@ -413,20 +714,14 @@ function isLocalAssetString(value) {
 		&& /\.(?:png|jpe?g|gif|svg)(?:\?.*)?$/.test(value)
 }
 
-/**
- * 获取 JavaScript 或 TypeScript 文件的绝对路径
- * @param {string} modulePath - 模块路径
- * @returns {string|null} - 文件的绝对路径，如果找不到则返回 null
- */
-function getJSAbsolutePath(modulePath) {
+function getScriptAbsolutePath(modulePath) {
 	const workPath = getWorkPath()
 	const resolvedModuleId = resolveModuleIdToExistingPath(modulePath)
 	if (!resolvedModuleId) {
 		return null
 	}
 
-	const fileTypes = ['.js', '.ts']
-	for (const ext of fileTypes) {
+	for (const ext of SCRIPT_EXTENSIONS) {
 		const fullPath = `${workPath}${resolvedModuleId}${ext}`
 		if (fs.existsSync(fullPath)) {
 			return fullPath
@@ -436,7 +731,7 @@ function getJSAbsolutePath(modulePath) {
 	return null
 }
 
-function resolveDependencyId(specifier, modulePath, allowAbsolute) {
+function resolveDependencyId(specifier, modulePath) {
 	if (!specifier) {
 		return { id: specifier, shouldProcess: false }
 	}
@@ -449,16 +744,9 @@ function resolveDependencyId(specifier, modulePath, allowAbsolute) {
 		}
 	}
 
-	if (specifier.startsWith('./') || specifier.startsWith('../')) {
-		return {
-			id: resolveRelativeModuleId(specifier, modulePath),
-			shouldProcess: true,
-		}
-	}
-
 	if (specifier.startsWith('/')) {
 		return {
-			id: allowAbsolute ? normalizeModuleId(specifier) : resolveRelativeModuleId(specifier, modulePath),
+			id: resolveModuleIdToExistingPath(specifier) || normalizeModuleId(specifier),
 			shouldProcess: true,
 		}
 	}
@@ -466,7 +754,22 @@ function resolveDependencyId(specifier, modulePath, allowAbsolute) {
 	const aliasResolved = resolveAppAlias(specifier)
 	if (aliasResolved) {
 		return {
-			id: normalizeModuleId(aliasResolved),
+			id: resolveModuleIdToExistingPath(aliasResolved) || normalizeModuleId(aliasResolved),
+			shouldProcess: true,
+		}
+	}
+
+	const tsResolved = resolveTypeScriptModuleId(specifier, modulePath)
+	if (tsResolved) {
+		return {
+			id: tsResolved,
+			shouldProcess: true,
+		}
+	}
+
+	if (specifier.startsWith('./') || specifier.startsWith('../')) {
+		return {
+			id: resolveRelativeModuleId(specifier, modulePath),
 			shouldProcess: true,
 		}
 	}
@@ -482,18 +785,55 @@ function resolveDependencyId(specifier, modulePath, allowAbsolute) {
 	return { id: specifier, shouldProcess: false }
 }
 
+function resolveTypeScriptModuleId(specifier, modulePath) {
+	const config = getTypeScriptConfig()
+	const compilerOptions = getTypeScriptCompilerOptions(config.options)
+	const host = compilerState.moduleResolutionHost || {
+		fileExists: ts.sys.fileExists,
+		readFile: ts.sys.readFile,
+		realpath: ts.sys.realpath,
+		directoryExists: ts.sys.directoryExists,
+		getDirectories: ts.sys.getDirectories,
+		useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
+	}
+	compilerState.moduleResolutionHost = host
+
+	const resolution = ts.resolveModuleName(specifier, modulePath, compilerOptions, host).resolvedModule
+	if (!resolution || resolution.isExternalLibraryImport) {
+		return null
+	}
+
+	const resolvedFileName = resolution.resolvedFileName
+	if (!resolvedFileName || resolvedFileName.endsWith('.d.ts')) {
+		return null
+	}
+
+	const workPath = getWorkPath()
+	const normalizedResolvedPath = path.resolve(resolvedFileName)
+	if (!normalizedResolvedPath.startsWith(workPath)) {
+		return null
+	}
+
+	return filePathToModuleId(normalizedResolvedPath)
+}
+
+function filePathToModuleId(filePath) {
+	const workPath = getWorkPath()
+	const relativePath = path.relative(workPath, filePath).replace(/\\/g, '/')
+	return normalizeModuleId(relativePath)
+}
+
 function isBareModuleSpecifier(specifier) {
 	return !specifier.startsWith('.') && !specifier.startsWith('/')
 }
 
 function resolveRelativeModuleId(specifier, modulePath) {
-	const requireFullPath = resolve(modulePath, `../${specifier}`)
-	const relativeId = requireFullPath.split(`${getWorkPath()}${sep}`)[1]
-	return normalizeModuleId(relativeId)
+	const requireFullPath = path.resolve(path.dirname(modulePath), specifier)
+	return filePathToModuleId(requireFullPath)
 }
 
 function normalizeModuleId(moduleId) {
-	let normalized = moduleId.replace(/\.(js|ts)$/, '').replace(/\\/g, '/')
+	let normalized = moduleId.replace(/\.(?:[cm]?js|jsx|[cm]?ts|tsx)$/, '').replace(/\\/g, '/')
 	if (!normalized.startsWith('/')) {
 		normalized = `/${normalized}`
 	}
@@ -512,13 +852,13 @@ function resolveModuleIdToExistingPath(moduleId) {
 	const normalizedModuleId = normalizeModuleId(moduleId)
 	const workPath = getWorkPath()
 
-	for (const ext of ['.js', '.ts']) {
+	for (const ext of SCRIPT_EXTENSIONS) {
 		if (fs.existsSync(`${workPath}${normalizedModuleId}${ext}`)) {
 			return normalizedModuleId
 		}
 	}
 
-	for (const ext of ['.js', '.ts']) {
+	for (const ext of SCRIPT_EXTENSIONS) {
 		if (fs.existsSync(`${workPath}${normalizedModuleId}/index${ext}`)) {
 			return `${normalizedModuleId}/index`
 		}
@@ -528,9 +868,9 @@ function resolveModuleIdToExistingPath(moduleId) {
 	if (fs.existsSync(packageJsonPath)) {
 		try {
 			const packageInfo = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'))
-			for (const entryField of ['miniprogram', 'main']) {
+			for (const entryField of ['miniprogram', 'module', 'main']) {
 				if (typeof packageInfo[entryField] === 'string' && packageInfo[entryField]) {
-					const entryModuleId = normalizeModuleId(resolve(normalizedModuleId, packageInfo[entryField]))
+					const entryModuleId = normalizeModuleId(path.resolve(normalizedModuleId, packageInfo[entryField]))
 					const resolvedEntry = resolveModuleIdToExistingPath(entryModuleId)
 					if (resolvedEntry) {
 						return resolvedEntry
@@ -544,6 +884,31 @@ function resolveModuleIdToExistingPath(moduleId) {
 	}
 
 	return null
+}
+
+function isTypeScriptFile(filePath) {
+	return TYPE_SCRIPT_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+}
+
+function isJsxFile(filePath) {
+	return ['.jsx', '.tsx'].includes(path.extname(filePath).toLowerCase())
+}
+
+function haveSameRootNames(nextRootNames, prevRootNames) {
+	if (nextRootNames.length !== prevRootNames.length) {
+		return false
+	}
+
+	const prevSet = new Set(prevRootNames)
+	return nextRootNames.every(rootName => prevSet.has(rootName))
+}
+
+function isDeclarationOutputFile(fileName) {
+	return /\.d\.(?:ts|mts|cts)$/.test(fileName)
+}
+
+function isDeclarationMapOutputFile(fileName) {
+	return /\.d\.(?:ts|mts|cts)\.map$/.test(fileName)
 }
 
 export { compileJS, buildJSByPath }

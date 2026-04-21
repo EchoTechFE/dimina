@@ -524,9 +524,8 @@ describe('Require Path Resolution', () => {
 		// 验证编译后的代码
 		const compiledCode = pageModule.code
 		
-		// 验证绝对路径被正确处理
-		// 注意：绝对路径会被 resolve 函数相对于当前文件进行解析
-		expect(compiledCode).toContain('require("/pages/absolute/utils/tools")')
+		// 验证绝对路径保持为小程序根路径
+		expect(compiledCode).toContain('require("/utils/tools")')
 	})
 
 	it('should handle require with file extensions', async () => {

@@ -111,4 +111,4 @@ function remapSourcemap(nextMap, prevMap) {
 	return smg.toString()
 }
 
-export { mergeSourcemap, remapSourcemap }
+export { mergeSourcemap, remapSourcemap, wrapModDefine }

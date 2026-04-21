@@ -113,15 +113,16 @@ miniprogram_npm/      ->  npm包构建   (npm组件支持)
 编译器现已支持现代前端开发工具：
 
 - ✅ **TypeScript 支持**: `.ts` 文件自动编译为 JavaScript
+- ✅ **完整 TS 编译链**: 默认读取 `tsconfig.json`，支持类型检查、路径别名、装饰器和声明输出
 - ✅ **ES6 Import 语句**: 支持相对路径、npm 包和绝对路径导入
 - ✅ **Less 支持**: `.less` 文件编译为 CSS，支持变量、mixin 和嵌套
 - ✅ **SCSS/Sass 支持**: `.scss` 和 `.sass` 文件编译为 CSS
-- ✅ **错误处理**: 编译失败时自动回退，不中断构建流程
+- ✅ **错误处理**: TypeScript 诊断会直接中断构建并返回明确信息
 - ✅ **向后兼容**: 完全兼容现有的 `.js` 和 `.wxss` 文件
 
 #### 支持的文件类型
 
-**逻辑文件查找顺序**: `.js` → `.ts`
+**逻辑文件查找顺序**: `.js` → `.jsx` → `.mjs` → `.cjs` → `.ts` → `.tsx` → `.mts` → `.cts`
 **样式文件查找顺序**: `.wxss` → `.ddss` → `.less` → `.scss` → `.sass`
 
 详细使用说明请参考：[TypeScript、Less 和 SCSS 支持文档](./docs/typescript-less-scss-support.md)

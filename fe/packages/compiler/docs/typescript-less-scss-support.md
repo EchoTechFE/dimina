@@ -6,22 +6,31 @@ Dimina 编译器现在支持 TypeScript、Less 和 SCSS 文件的编译，为开
 
 ### TypeScript 支持
 
-- **文件扩展名**: `.ts`
+- **文件扩展名**: `.ts`, `.tsx`, `.mts`, `.cts`
 - **自动编译**: TypeScript 文件会自动编译为 JavaScript
-- **类型检查**: 基本的 TypeScript 语法支持
-- **错误处理**: 编译失败时会回退到原始代码
+- **完整编译**: 使用 TypeScript Compiler API 参与类型检查和代码生成
+- **配置读取**: 默认读取项目根目录的 `tsconfig.json`
+- **声明输出**: 当 `declaration` 或 `emitDeclarationOnly` 开启时，同步输出到产物目录的 `types/`
+- **错误处理**: TypeScript 诊断会中断构建并返回明确错误
 
 #### 支持的 TypeScript 编译选项
 
 ```json
 {
   "target": "ES2020",
-  "module": "CommonJS",
-  "strict": false,
-  "esModuleInterop": true,
+  "module": "ESNext",
+  "baseUrl": ".",
+  "paths": {
+    "@lib/*": ["src/lib/*"]
+  },
+  "experimentalDecorators": true,
+  "emitDecoratorMetadata": true,
+  "declaration": true,
   "skipLibCheck": true
 }
 ```
+
+编译器会尊重项目的 `tsconfig.json`，并在最终产物阶段统一转换为运行时需要的 CommonJS 格式。
 
 #### Import 语句支持
 
@@ -332,15 +341,16 @@ project/
 
 ## 注意事项
 
-1. **TypeScript 配置**: 编译器使用内置的 TypeScript 配置，不支持自定义 `tsconfig.json`
+1. **TypeScript 配置**: 默认读取项目根目录的 `tsconfig.json`，未配置时回退到内置默认值
 2. **样式作用域**: 编译后的样式会自动添加作用域，避免样式冲突
 3. **文件命名**: 保持与微信小程序的文件命名约定一致
-4. **兼容性**: 完全向后兼容，现有的 `.js` 和 `.wxss` 文件继续正常工作
+4. **声明文件**: 当 TypeScript 开启声明输出时，编译产物会额外生成 `types/` 目录
+5. **兼容性**: 完全向后兼容，现有的 `.js` 和 `.wxss` 文件继续正常工作
 
 ## 测试覆盖
 
-- **TypeScript 编译测试**: 3个测试用例，覆盖页面、组件和错误处理
+- **TypeScript 编译测试**: 覆盖页面、组件、sourcemap、路径别名、装饰器元数据和声明输出
 - **样式预处理器测试**: 覆盖 Less、SCSS 和 Sass 的基本编译功能
-- **错误处理测试**: 确保编译失败时不会中断整个构建流程
+- **错误处理测试**: 确保 TypeScript 诊断能够中断构建并返回明确信息
 
 通过这些新功能，开发者可以使用现代的前端开发工具和语法来开发微信小程序，提高开发效率和代码质量。 
