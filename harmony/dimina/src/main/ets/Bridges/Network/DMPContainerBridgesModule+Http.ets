@@ -3,7 +3,7 @@ import { DMPNetServiceNext } from '../../HttpManager/DMPNetServiceNext';
 import { DMPContainerBridgesModule } from '../DMPContainerBridgesModule';
 import { DMPBridgeCallback, isMainThread } from '../DMPTSUtil';
 import { BusinessError, request } from '@kit.BasicServicesKit';
-import { DMPMap } from '@didi-dimina/dimina/ets/Utils/DMPMap';
+import { DMPMap } from '../../Utils/DMPMap';
 import { DMPContextUtils } from '../../Utils/DMPContextUtils';
 import { DMPFileUrlConvertor } from '../../Bundle/Util/DMPFileUrlConvertor';
 export class DMPContainerBridgesModuleHttp extends DMPContainerBridgesModule {
