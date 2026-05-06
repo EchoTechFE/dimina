@@ -80,8 +80,4 @@ export class DMPBundleManager {
   getAppRootDir(): string {
     return this.bundleLoader.getAppRootDir();
   }
-
-
 }
-
-

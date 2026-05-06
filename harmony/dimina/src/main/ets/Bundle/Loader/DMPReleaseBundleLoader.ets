@@ -99,7 +99,7 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
   //加载底包
   async loadLocalPackage(bundleLoadInfo: DMPBundleLoadInfo) {
     try {
-      if (bundleLoadInfo.isAppUpdate() || DMPContextUtils.debugMode) {
+      if (bundleLoadInfo.isAppUpdate() || false) {
         DMPLogger.i(Tags.LOAD_LOCAL_BUNDLE, '应用有更新');
         //加载本地配置
         this.loadLocalBundleConfig(bundleLoadInfo);
@@ -267,7 +267,6 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     const version = this.installBundleInfo?.cacheJSSdkBundleConfig?.versionCode!;
     const dir = this.fileManager.getJSSdkVersionDevDir(`${version}`);
     const path: string = `${dir}/assets/service.js`;
-    DMPLogger.i(Tags.LAUNCH, "requestMainJsUri end")
     return path;
   }
 
@@ -280,9 +279,13 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
 
   async requestConfigFile(): Promise<string> {
     DMPLogger.i(Tags.LAUNCH, "requestConfigFile start")
+    // 从版本目录根读取 config.json（不是 main 子目录）
     let data = this.readModuleFileToString('main', 'app-config.json');
     if (DMPTextUtils.isEmpty(data)) {
       DMPLogger.e(Tags.LAUNCH, "request config is null")
+    } else {
+      DMPLogger.i(Tags.LAUNCH, `[诊断] config.json 内容: ${data}`)
+      DMPLogger.i(Tags.LAUNCH, `[诊断] config.json 长度: ${data.length}`)
     }
     DMPLogger.i(Tags.LAUNCH, "requestConfigFile end")
     return data
@@ -332,5 +335,3 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     this.waitLoadError(errCode, errMsg);
   }
 }
-
-

@@ -13,9 +13,9 @@ import { DMPLogger } from '../EventTrack/DMPLogger'
 import { Tags } from '../EventTrack/Tags'
 import window from '@ohos.window'
 import { ImageKnife } from '@ohos/imageknife'
+import { DMPContainerBridgesModule } from '../Bridges/DMPContainerBridgesModule'
 import { DMPWebViewController } from '../HybridContainer/DMPWebViewController'
 import { DMPAppModuleManager } from '../Bridges/DMPAppModuleManager'
-import { DMPContainerBridgesModule } from '../Bridges/DMPContainerBridgesModule'
 import { DMPWindowUtil } from '../Utils/DMPWindowUtils'
 import { DMPEntryContext } from './config/DMPEntryContext'
 import { DMPChannelProxyNext } from '../Service/DMPChannelProxyNext'
@@ -73,20 +73,16 @@ export class DMPApp {
     return this._containerBridges
   }
 
+  public registerCustomBridge(module: DMPContainerBridgesModule, moduleName?: string): void {
+    this._appModuleManager.registerCustomBridge(module, moduleName)
+  }
+
   public static get entryContext(): DMPEntryContext {
     return DMPApp._entryContext
   }
 
   public get appModuleManager(): DMPAppModuleManager {
     return this._appModuleManager
-  }
-
-  /**
-   * 注册自定义 Bridge 模块。必须在 launch() 之前调用。
-   * 详细语义见 DMPModuleManager.registerCustomBridge。
-   */
-  public registerCustomBridge(module: DMPContainerBridgesModule, moduleName?: string): void {
-    this._appModuleManager.registerCustomBridge(module, moduleName)
   }
 
   private _bundleManager: DMPBundleManager
@@ -134,7 +130,10 @@ export class DMPApp {
   static init(context: DMPEntryContext) {
     DMPApp._entryContext = context;
     DMPApp._context = DMPApp._entryContext.getContext();
-    ImageKnife.with(DMPApp._entryContext.getContext())
+    // 初始化 ImageKnife 文件缓存（异步执行，不阻塞初始化流程）
+    ImageKnife.getInstance().initFileCache(DMPApp._entryContext.getContext()).catch((err: Error) => {
+      console.error('ImageKnife initFileCache failed:', err);
+    });
     context.getWindowStage().on('windowStageEvent', DMPAppLifecycle.onWindowStageEvent);
     DMPDeviceUtil.prepareSafeAreaAndDisplayWH(DMPApp._entryContext.getContext())
   }
@@ -235,13 +234,23 @@ export class DMPApp {
       installConfig.launchAppType = this.appConfig.launchAppType;
 
       let waitLaunchBundleReady = async (config: DMPBundleLoadInfo) => {
-        DMPLogger.i(Tags.LAUNCH, "launchBundleReady: launchType: " + DMPLaunchType[installConfig.launchAppType]);
-        await this._bundleManager.loadConfigFile()
-        this._service.updateWorkerAppData();
-        await this.startEngineService()
-        await this.startMainService()
-
-        this._engineStatus.setStatus(EngineStatus.RUN)
+        try {
+          DMPLogger.i(Tags.LAUNCH, "launchBundleReady: launchType: " + DMPLaunchType[installConfig.launchAppType]);
+          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤1: 加载配置文件");
+          await this._bundleManager.loadConfigFile()
+          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤2: 更新 Worker 数据");
+          this._service.updateWorkerAppData();
+          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤3: 启动引擎服务");
+          await this.startEngineService()
+          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤4: 启动主服务");
+          await this.startMainService()
+          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤5: 设置状态为 RUN");
+          this._engineStatus.setStatus(EngineStatus.RUN)
+          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 完成");
+        } catch (e) {
+          DMPLogger.e(Tags.LAUNCH, `[waitLaunchBundleReady] 启动失败: ${e}`);
+          throw new Error(String(e));
+        }
       };
 
       const loadComplete = (config: DMPBundleLoadInfo) => {

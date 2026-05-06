@@ -9,7 +9,6 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { DMPMap } from '../Utils/DMPMap';
 import BuildProfile from '../../../../BuildProfile';
 import { access } from '@kit.ConnectivityKit';
-//import { TokenManager } from '@kuril/kuril-service-component';
 
 export class DMPContainerBridgesModuleSystem extends DMPContainerBridgesModule {
   private bundleInfo?: bundleManager.BundleInfo
@@ -18,32 +17,13 @@ export class DMPContainerBridgesModuleSystem extends DMPContainerBridgesModule {
 
   getExportMethods(): string[] {
     return ['getSystemInfoSync', 'getEnv', 'getSystemInfoAsync', 'getAccountInfoSync', 'getSystemInfo',
-      'getDiminaCurStackPages', 'getSystemSetting', 'getWindowInfo', 'token'];
+      'getDiminaCurStackPages', 'getSystemSetting', 'getWindowInfo'];
   }
 
   getWindowInfo(data: DMPMap, callback: DMPBridgeCallback) {
     const windowInfo = DMPDeviceUtil.getSafeAreaAndDisplayWHSync()
     this.invokeSuccessCallback(callback, windowInfo)
     return windowInfo;
-  }
-
-  //千岛 only
-  token(data: DMPMap, callback: DMPBridgeCallback) {
-    DMPLogger.i('DMPBridge', 'token bridge called')
-    const tokenStr = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU1OTEzNDE2NzAzNjc4MTc0NiIsInR5cGUiOiJVU0VSIiwiZGV2aWNlSWQiOiIxMDMxIiwiZXhwIjoxNzc2OTI1NjAyLCJpYXQiOjE3NzY2NjY0MDJ9.RvFZbY_lkdHBTkfvZxMx9Q-9hZFuGHc7or6Km032X3nDUNFbhchAwhwKWkJh7YMledDjzTQIps_wotJdqZ1GH9Ye1FpWbRoy7w8yaMn6O6FnsznrXUbQZXb5c8FWMCDsFTBjAEn_lkyRVCeQngTgjH-1e9S9slVL755GZselEnkQ88rcG8sDS-Ggt-JIVynH8quWZOiRLCIbpVGW4pam3XCHQQmCgg4ABz3swmD6hnI6BodfI4tabGF0D2hYQ0Q5JjV8ixzq_ahqCIf2MZpfGVDsm6WpshT0RvNn8xQI7xiz5JOPl_0hApgASIliO4NaCXCFiwx-ZWgnyE6ic7h-zA'
-    const result = new DMPMap({ 'token': tokenStr })
-    this.invokeSuccessCallback(callback, result)
-    DMPLogger.i('DMPBridge', `token returned: ${tokenStr.substring(0, 50)}...`)
-    return result
-//    try {
-//      const token = TokenManager.getInstance().getToken();
-//      const result = new DMPMap({ 'token': token });
-//      this.invokeSuccessCallback(callback, result);
-//      return result;
-//    } catch (e) {
-//      DMPLogger.e("token bridge 获取失败: " + e);
-//      return new DMPMap();
-//    }
   }
 
   getDiminaCurStackPages(data: DMPMap, callback: DMPBridgeCallback) {
