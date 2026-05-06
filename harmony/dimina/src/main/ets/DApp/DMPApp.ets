@@ -15,6 +15,7 @@ import window from '@ohos.window'
 import { ImageKnife } from '@ohos/imageknife'
 import { DMPWebViewController } from '../HybridContainer/DMPWebViewController'
 import { DMPAppModuleManager } from '../Bridges/DMPAppModuleManager'
+import { DMPContainerBridgesModule } from '../Bridges/DMPContainerBridgesModule'
 import { DMPWindowUtil } from '../Utils/DMPWindowUtils'
 import { DMPEntryContext } from './config/DMPEntryContext'
 import { DMPChannelProxyNext } from '../Service/DMPChannelProxyNext'
@@ -78,6 +79,14 @@ export class DMPApp {
 
   public get appModuleManager(): DMPAppModuleManager {
     return this._appModuleManager
+  }
+
+  /**
+   * 注册自定义 Bridge 模块。必须在 launch() 之前调用。
+   * 详细语义见 DMPModuleManager.registerCustomBridge。
+   */
+  public registerCustomBridge(module: DMPContainerBridgesModule, moduleName?: string): void {
+    this._appModuleManager.registerCustomBridge(module, moduleName)
   }
 
   private _bundleManager: DMPBundleManager
