@@ -1,5 +1,6 @@
 import { DMPExportModule } from './DMPExportModule';
 
+import { DMPContainerBridgesModuleAudio } from './Audio/DMPContainerBridgesModule+Audio';
 import { DMPContainerBridgesModuleHttp } from './Network/DMPContainerBridgesModule+Http';
 import { DMPContainerBridgesModuleStorage } from './DMPContainerBridgesModule+Storage';
 import { DMPModuleManager } from './DMPModuleManager';
@@ -17,7 +18,7 @@ export class DMPWorkerModuleManager extends DMPModuleManager {
     this.exportModules['DMPContainerBridgesModule'] = module
     this.registerModule(new DMPContainerBridgesModuleHttp(app))
     this.registerModule(new DMPContainerBridgesModuleStorage(app))
-
+    this.registerModule(new DMPContainerBridgesModuleAudio(app))
   }
 }
 

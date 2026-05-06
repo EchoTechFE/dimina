@@ -40,6 +40,13 @@ export class DMPWorkerWrapper {
       let response: WorkerResponse = e.data;
       let decoder = util.TextDecoder.create('utf-8');
       let msg = decoder.decodeToString(new Uint8Array(response.ab));
+
+      // 过滤掉 console.log 消息，不发送到 Render
+      if (response.type === 'sendLogToContainer') {
+        DMPLogger.d(Tags.JS_ENGINE, `[QuickJS Console] ${msg}`);
+        return;
+      }
+
       DMPChannelProxyNext.ServiceToRenderWithAppIndex(msg, response.id, appIndex);
     }
 

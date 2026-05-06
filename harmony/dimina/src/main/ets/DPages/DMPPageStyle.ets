@@ -100,4 +100,14 @@ export class DMPPageStyle {
     }
     return '#ffffff';
   }
+
+  isShareMenuEnabled(): boolean {
+    // 默认情况下分享菜单是启用的，除非明确设置为 false
+    const enabled: boolean = this.navStyle.get('enableShareMenu') as boolean;
+    return enabled === undefined || enabled === true;
+  }
+
+  getShareTicketEnabled(): boolean {
+    return (this.navStyle.get('withShareTicket') as boolean) ?? false;
+  }
 }
