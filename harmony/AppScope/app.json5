@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "com.didi.dimina.sample",
+    "bundleName": "h5.cactus.echo",
     "vendor": "example",
     "versionCode": 1000000,
     "versionName": "1.0.0",

@@ -121,6 +121,12 @@ public class DMPApp {
         print("openPage")
         var newLaunchConfig = launchConfig
         newLaunchConfig.appEntryPath = self.bundleAppConfig?.entryPagePath ?? ""
+
+        // 如果存在 tabBar 配置，先创建 tabBar 容器并设置内层导航
+        if let tabBarConfig = self.bundleAppConfig?.tabBar {
+            await navigator?.setupTabBarContainer(tabBarConfig: tabBarConfig)
+        }
+
         await navigator?.launch(to: newLaunchConfig.appEntryPath ?? "", query: newLaunchConfig.query)
     }
 

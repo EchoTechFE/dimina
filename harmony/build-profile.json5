@@ -28,13 +28,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "./keystore/debug.cer",
+          "certpath": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B242B64273942B1A977DF17CF706879A153717AC4FFBBBA65ED5212E68330277EC28FF997590D27",
-          "profile": "./keystore/debug.p7b",
+          "keyPassword": "0000001A043E412A08760C8C6F5169CD4D122312EFE59154DEC6EE98A54E349BE68590BE7A78160CEB5A",
+          "profile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "./keystore/debug.p12",
-          "storePassword": "0000001BEF593204165A11BFFE05CA8EBA6AB41D2678113A10D651BAF822A698564905B8D7D7DC8BC3E3D3"
+          "storeFile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p12",
+          "storePassword": "0000001ADFBC6764BD14C252668C5C00A716CE3B03FDCA46D3DA7403FCC36B88D0D4E56A2DEA7FC9331D"
         }
       }
     ]
