@@ -29,6 +29,7 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
   //启动包准备好
   private isLaunchBundleReady = false
   private app: DMPApp
+  private appOnline = true
 
   constructor(app: DMPApp) {
     this.app = app;
@@ -99,23 +100,39 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
   //加载底包
   async loadLocalPackage(bundleLoadInfo: DMPBundleLoadInfo) {
     try {
-      if (bundleLoadInfo.isAppUpdate() || false) {
-        DMPLogger.i(Tags.LOAD_LOCAL_BUNDLE, '应用有更新');
-        //加载本地配置
-        this.loadLocalBundleConfig(bundleLoadInfo);
-        //安装jsApp本地包
-        await this.installLocalJsAppBundle(bundleLoadInfo);
-        //安装jsSdk本地包
+      if(this.appOnline){
+        let localJSSdkConfigJson =
+          DMPRawFileUtils.loadFile(DMPContextUtils.getUIAbilityContext(), 'jssdk/config.json');
+        if (DMPStringUtils.isNotEmpty(localJSSdkConfigJson)) {
+          bundleLoadInfo.localJSSdkBundleConfig =
+            DMPJSSdkBundleConfig.fromJson(DMPMap.createFromString(localJSSdkConfigJson));
+        }
         await this.installLocalJSSDKBundle(bundleLoadInfo);
-        //安装成功以后，存储version
-        DMPPreference.getInstance().put(bundleLoadInfo.appId + "_versionName", bundleLoadInfo.appVersionName!)
-        DMPPreference.getInstance().put(bundleLoadInfo.appId + "_versionCode", bundleLoadInfo.appVersionCode!)
-        this.tryLaunchApp(bundleLoadInfo);
-      } else {
         DMPLogger.i(Tags.BUNDLE, "加载缓存包")
         this.loadCacheConfig(bundleLoadInfo);
         this.tryLaunchApp(bundleLoadInfo);
+      } else {
+        if (bundleLoadInfo.isAppUpdate() || false) {
+          DMPLogger.i(Tags.LOAD_LOCAL_BUNDLE, '应用有更新');
+          //加载本地配置
+          this.loadLocalBundleConfig(bundleLoadInfo);
+          //安装jsApp本地包
+                let cacheJSAppConfig = this.fileManager.loadJSAppConfig(bundleLoadInfo.appId);
+          bundleLoadInfo.cacheJSAppBundleConfig = DMJSAppBundleConfig.fromJson(cacheJSAppConfig);
+          //await this.installLocalJsAppBundle(bundleLoadInfo);
+          //安装jsSdk本地包
+          await this.installLocalJSSDKBundle(bundleLoadInfo);
+          //安装成功以后，存储version
+          DMPPreference.getInstance().put(bundleLoadInfo.appId + "_versionName", bundleLoadInfo.appVersionName!)
+          DMPPreference.getInstance().put(bundleLoadInfo.appId + "_versionCode", bundleLoadInfo.appVersionCode!)
+          this.tryLaunchApp(bundleLoadInfo);
+        } else {
+          DMPLogger.i(Tags.BUNDLE, "加载缓存包")
+          this.loadCacheConfig(bundleLoadInfo);
+          this.tryLaunchApp(bundleLoadInfo);
+        }
       }
+
     } catch (e) {
       this.handleException(Tags.LOAD_LOCAL_BUNDLE, ErrorCode.LOAD_LOCAL_BUNDLE_FAILED, e);
     }
@@ -178,7 +195,6 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
   }
 
   private async installLocalJsAppBundle(bundleLoadInfo: DMPBundleLoadInfo) {
-
     if (bundleLoadInfo.localJSAppBundleConfig != null) {
       let cacheJSAppConfig = this.fileManager.loadJSAppConfig(bundleLoadInfo.appId);
       bundleLoadInfo.cacheJSAppBundleConfig = DMJSAppBundleConfig.fromJson(cacheJSAppConfig);
@@ -253,12 +269,14 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     const appId = this.installBundleInfo?.appId!;
     const code = this.installBundleInfo?.cacheJSAppBundleConfig?.versionCode!;
     const dir = this.fileManager.getJSAppVersionDir(appId, code.toString());
+    DMPLogger.i(Tags.LAUNCH, `[诊断] readModuleFilePath - appId: ${appId}, versionCode: ${code}, dir: ${dir}`)
     let filePath: string;
     if (module === "/" || module === "") {
       filePath = `${dir}/${fileName}`;
     } else {
       filePath = `${dir}/${module}/${fileName}`;
     }
+    DMPLogger.i(Tags.LAUNCH, `[诊断] readModuleFilePath - module: ${module}, fileName: ${fileName}, 完整路径: ${filePath}`)
     return filePath;
   }
 

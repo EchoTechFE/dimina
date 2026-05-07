@@ -24,6 +24,9 @@ export class MiniApp {
 			timer: null,
 		}
 		this.color = null
+		// TabBar support (multi-iframe approach)
+		this.tabBarPagePaths = new Set()
+		this.tabBarBridges = new Map()  // path -> bridge mapping
 	}
 
 	viewDidLoad() {
@@ -53,6 +56,14 @@ export class MiniApp {
 
 		this.appConfig = JSON.parse(configContent)
 
+		// Initialize tabBar page paths if tabBar exists
+		if (this.appConfig.app.tabBar && this.appConfig.app.tabBar.list) {
+			this.tabBarPagePaths = new Set(
+				this.appConfig.app.tabBar.list.map((item) => item.pagePath),
+			)
+			console.log('📱 [initApp] TabBar 页面:', Array.from(this.tabBarPagePaths))
+		}
+
 		const entryPagePath = this.appInfo.pagePath || this.appConfig.app.entryPagePath
 
 		// 4. 读取页面配置
@@ -76,10 +87,22 @@ export class MiniApp {
 		})
 
 		this.bridgeList.push(entryPageBridge)
+
+		// If entry page is a tabBar page, store it in tabBarBridges for reuse
+		if (this.tabBarPagePaths.has(entryPagePath)) {
+			this.tabBarBridges.set(entryPagePath, entryPageBridge)
+			console.log('📱 [initApp] 入口页面是 TabBar 页面，已缓存:', entryPagePath)
+		}
+
 		entryPageBridge.start()
 		HashRouter.sync(this.appId, entryPagePath, this.appInfo.query)
 
-		// 6.隐藏 loading
+		// 7. 渲染 TabBar（如果存在）
+		if (this.appConfig.app.tabBar) {
+			this.renderTabBar(this.appConfig.app.tabBar, entryPagePath)
+		}
+
+		// 8.隐藏 loading
 		this.hideLaunchScreen()
 	}
 
@@ -393,6 +416,354 @@ export class MiniApp {
 		preBridge.webview.el.classList.remove('dimina-native-view--enter-anima')
 		preBridge.webview.el.classList.remove('dimina-native-view--instage')
 		currentBridge.webview.el.parentNode.removeChild(currentBridge.webview.el)
+	}
+
+	/**
+	 * Switch to a tabBar page (multi-iframe approach for WebView reuse)
+	 * Similar to HarmonyOS/iOS/Android container implementations
+	 */
+	async switchTab(opts) {
+		console.log('🔄 [switchTab] 开始切换', opts)
+
+		try {
+			const { url, success, fail, complete } = opts
+			console.log('  Step 1: 解析参数', { url, success, fail, complete })
+
+			let { query, pagePath } = queryPath(url)
+			console.log('  Step 2: 解析路径（原始）', { query, pagePath })
+
+			// Remove leading slash from pagePath to match tabBarPagePaths format
+			if (pagePath.startsWith('/')) {
+				pagePath = pagePath.substring(1)
+			}
+			console.log('  Step 2b: 去除前导斜杠后', { pagePath })
+
+			const onSuccess = this.createCallbackFunction(success)
+			const onFail = this.createCallbackFunction(fail)
+			const onComplete = this.createCallbackFunction(complete)
+			console.log('  Step 3: 创建回调函数')
+
+			// Check if this is a tabBar page
+			console.log('  Step 4: 检查是否为 tabBar 页面')
+			console.log('  tabBarPagePaths:', Array.from(this.tabBarPagePaths))
+			console.log('  pagePath:', pagePath)
+			console.log('  has(pagePath):', this.tabBarPagePaths.has(pagePath))
+
+			if (!this.tabBarPagePaths.has(pagePath)) {
+				console.warn('❌ [switchTab] 目标页面不是 tabBar 页面:', pagePath)
+				onFail?.({ errMsg: 'switchTab:fail not a tabBar page' })
+				onComplete?.()
+				return
+			}
+
+			console.log('✅ Step 5: 确认是 tabBar 页面，继续执行')
+
+			// Log current state
+			console.log('📊 [switchTab] 当前状态快照:')
+			console.log('  bridgeList 长度:', this.bridgeList.length)
+			console.log('  bridgeList 页面路径:', this.bridgeList.map(b => ({
+				id: b.id,
+				pagePath: b.opts.pagePath,
+				isTabBar: this.tabBarPagePaths.has(b.opts.pagePath)
+			})))
+			console.log('  tabBarBridges 数量:', this.tabBarBridges.size)
+
+			// Hide current page
+			console.log('  Step 6: 隐藏当前页面')
+			const currentBridge = this.bridgeList[this.bridgeList.length - 1]
+			console.log('  currentBridge:', currentBridge?.opts?.pagePath, 'id:', currentBridge?.id)
+			if (currentBridge) {
+				console.log('  👁️ 隐藏当前页面:', currentBridge.opts.pagePath)
+				currentBridge.pageHide()
+				currentBridge.webview.el.style.display = 'none'
+			} else {
+				console.log('  ⚠️ 没有当前页面需要隐藏')
+			}
+
+			// Remove all non-tabBar pages from stack
+			const nonTabBarBridges = this.bridgeList.filter(
+				(bridge) => !this.tabBarPagePaths.has(bridge.opts.pagePath),
+			)
+			if (nonTabBarBridges.length > 0) {
+				console.log(`  🗑️ 移除 ${nonTabBarBridges.length} 个非 tabBar 页面:`)
+				nonTabBarBridges.forEach((bridge) => {
+					console.log('    - 移除:', bridge.opts.pagePath, 'id:', bridge.id)
+					bridge.destroy()
+					if (bridge.webview?.el) {
+						bridge.webview.el.remove()
+					}
+					const index = this.bridgeList.indexOf(bridge)
+					if (index >= 0) {
+						this.bridgeList.splice(index, 1)
+					}
+				})
+				console.log('  清理后 bridgeList 长度:', this.bridgeList.length)
+				console.log('  清理后 bridgeList:', this.bridgeList.map(b => b.opts.pagePath))
+			}
+
+			// Check if target tabBar page exists
+			console.log('  Step 7: 查找目标 tabBar 页面')
+			console.log('  tabBarBridges keys:', Array.from(this.tabBarBridges.keys()))
+			let targetBridge = this.tabBarBridges.get(pagePath)
+			console.log('  targetBridge:', targetBridge)
+
+			if (targetBridge) {
+				// Reuse existing tabBar page
+				console.log('  ✅ 复用已存在的 tabBar 页面:', pagePath)
+				console.log('    targetBridge id:', targetBridge.id)
+				console.log('    targetBridge webview:', targetBridge.webview?.el)
+
+				// Show target page
+				targetBridge.webview.el.style.display = 'block'
+
+				// Remove animation classes to prevent white screen
+				targetBridge.webview.el.classList.remove('dimina-native-view--slide-out')
+				targetBridge.webview.el.classList.remove('dimina-native-view--enter-anima')
+				targetBridge.webview.el.classList.remove('dimina-native-view--instage')
+				console.log('    已设置 display = block 并清除动画类')
+
+				// Move to stack top if not already there
+				const index = this.bridgeList.indexOf(targetBridge)
+				console.log('    当前在栈中的位置:', index, '栈总长度:', this.bridgeList.length)
+				if (index >= 0 && index !== this.bridgeList.length - 1) {
+					this.bridgeList.splice(index, 1)
+					this.bridgeList.push(targetBridge)
+					console.log('    ✅ 更新栈顺序，移到栈顶')
+					console.log('    新栈顺序:', this.bridgeList.map(b => b.opts.pagePath))
+				} else if (index < 0) {
+					console.error('    ⚠️ 警告：targetBridge 不在 bridgeList 中！')
+				}
+
+				// Trigger lifecycle
+				targetBridge.pageShow()
+				HashRouter.sync(this.appId, pagePath, query)
+
+				// Update TabBar selection
+				this.updateTabBarSelection(pagePath)
+
+				onSuccess?.({ errMsg: 'switchTab:ok' })
+			}
+			else {
+				// Create new tabBar page
+				console.log('  🆕 创建新的 tabBar 页面:', pagePath)
+
+				const pageConfig = this.appConfig.modules[pagePath]
+				const mergeConfig = mergePageConfig(this.appConfig.app, pageConfig)
+
+				// Update status bar color
+				this.updateTargetPageColorStyle(mergeConfig)
+
+				// Create bridge
+				const bridge = await this.createBridge({
+					pagePath,
+					query,
+					scene: this.appInfo.scene,
+					jscore: this.jscore,
+					isRoot: true,
+					root: pageConfig?.root || 'main',
+					appId: this.appInfo.appId,
+					pages: this.appConfig.app.pages,
+					configInfo: mergeConfig,
+				})
+
+				// Store in tabBar bridges map
+				this.tabBarBridges.set(pagePath, bridge)
+
+				// Add to bridge list
+				this.bridgeList.push(bridge)
+
+				// Show the page
+				bridge.webview.el.style.display = 'block'
+				bridge.webview.el.style.zIndex = 1
+
+				// Remove animation classes to prevent white screen
+				bridge.webview.el.classList.remove('dimina-native-view--slide-out')
+				bridge.webview.el.classList.remove('dimina-native-view--enter-anima')
+				bridge.webview.el.classList.remove('dimina-native-view--instage')
+
+				// Start bridge
+				bridge.start()
+				HashRouter.sync(this.appId, pagePath, query)
+
+				// Update TabBar selection
+				this.updateTabBarSelection(pagePath)
+
+				console.log('  ✅ TabBar 页面创建完成')
+
+				onSuccess?.({ errMsg: 'switchTab:ok' })
+			}
+
+			onComplete?.()
+
+			// Final state snapshot
+			console.log('📊 [switchTab] 切换完成后的最终状态:')
+			console.log('  bridgeList 长度:', this.bridgeList.length)
+			console.log('  bridgeList 详情:', this.bridgeList.map(b => ({
+				pagePath: b.opts.pagePath,
+				id: b.id,
+				display: b.webview?.el?.style?.display
+			})))
+			console.log('  tabBarBridges 缓存:', Array.from(this.tabBarBridges.entries()).map(([path, bridge]) => ({
+				path,
+				bridgeId: bridge.id
+			})))
+			console.log('✅✅✅ [switchTab] 切换完成')
+		}
+		catch (error) {
+			console.error('❌❌❌ [switchTab] 捕获到错误:', error)
+			console.error('错误堆栈:', error.stack)
+			onFail?.({ errMsg: `switchTab:fail ${error.message}` })
+			onComplete?.()
+		}
+	}
+
+	/**
+	 * Render TabBar UI
+	 */
+	renderTabBar(tabBarConfig, currentPath) {
+		console.log('📱 [renderTabBar] 开始渲染 TabBar')
+		console.log('📱 [renderTabBar] tabBarConfig:', tabBarConfig)
+		console.log('📱 [renderTabBar] currentPath:', currentPath)
+
+		const tabBarEl = this.el.querySelector('.dimina-mini-app__tabbar')
+		if (!tabBarEl) {
+			console.error('❌ [renderTabBar] TabBar element not found!')
+			return
+		}
+		console.log('✅ [renderTabBar] TabBar 元素找到了')
+
+		const { color, selectedColor, backgroundColor, borderStyle, list } = tabBarConfig
+		console.log('📱 [renderTabBar] TabBar 配置 - list.length:', list?.length)
+
+		// Generate TabBar HTML
+		const tabBarHTML = `
+			<div class="dimina-tabbar" style="
+				background-color: ${backgroundColor || '#ffffff'};
+				border-top: 0.5px solid ${borderStyle === 'white' ? '#ffffff' : 'rgba(0, 0, 0, 0.2)'};
+			">
+				${list
+					.map(
+						(item, index) => `
+					<div class="dimina-tabbar-item" data-path="${item.pagePath}" data-index="${index}">
+						${
+							item.iconPath
+								? `
+							<img class="dimina-tabbar-icon dimina-tabbar-icon-default"
+								src="${import.meta.env.BASE_URL}${this.appId}/main/${item.iconPath}"
+								alt="${item.text}" />
+							${
+								item.selectedIconPath
+									? `<img class="dimina-tabbar-icon dimina-tabbar-icon-selected"
+									src="${import.meta.env.BASE_URL}${this.appId}/main/${item.selectedIconPath}"
+									alt="${item.text}" />`
+									: ''
+							}
+						`
+								: ''
+						}
+						<span class="dimina-tabbar-text" style="color: ${color || '#999999'};">
+							${item.text}
+						</span>
+					</div>
+				`,
+					)
+					.join('')}
+			</div>
+		`
+
+		tabBarEl.innerHTML = tabBarHTML
+		tabBarEl.style.display = 'block'
+		console.log('✅ [renderTabBar] TabBar HTML 已插入，display 设置为 block')
+
+		// Adjust webviews container to make room for TabBar
+		const webviewsContainer = this.el.querySelector('.dimina-mini-app__webviews')
+		if (webviewsContainer) {
+			webviewsContainer.style.bottom = '49px' // Make room for TabBar
+			console.log('✅ [renderTabBar] webviews bottom 设置为 49px')
+		} else {
+			console.warn('⚠️ [renderTabBar] webviews 容器未找到')
+		}
+
+		// Check if TabBar is visible
+		const computedStyle = window.getComputedStyle(tabBarEl)
+		console.log('📱 [renderTabBar] TabBar 样式检查:', {
+			display: computedStyle.display,
+			position: computedStyle.position,
+			zIndex: computedStyle.zIndex,
+			bottom: computedStyle.bottom,
+			height: computedStyle.height
+		})
+
+		// Bind click events
+		const items = tabBarEl.querySelectorAll('.dimina-tabbar-item')
+		console.log('📱 [renderTabBar] 查找到的 TabBar 项数量:', items.length)
+		items.forEach((item, index) => {
+			const path = item.getAttribute('data-path')
+			console.log(`📱 [renderTabBar] 为 Tab ${index} 绑定点击事件, path:`, path)
+
+			item.addEventListener('click', (e) => {
+				console.log(`🔘🔘🔘 [TabBar] ===== 点击事件触发 ===== Tab ${index}:`, path)
+				console.log('点击事件对象:', e)
+				e.stopPropagation()
+				this.switchTab({ url: `/${path}` })
+			})
+
+			// 添加鼠标悬停效果来测试元素是否可交互
+			item.addEventListener('mouseenter', () => {
+				console.log(`🖱️ [TabBar] 鼠标进入 Tab ${index}`)
+			})
+		})
+
+		// Set initial selected state
+		this.updateTabBarSelection(currentPath, color, selectedColor)
+
+		// Test: Add a global click listener to the TabBar container
+		tabBarEl.addEventListener('click', (e) => {
+			console.log('🔥🔥🔥 [TabBar] TabBar 容器被点击了！', e.target)
+		})
+
+		console.log('✅✅✅ [renderTabBar] TabBar 渲染完成 ✅✅✅')
+	}
+
+	/**
+	 * Update TabBar selected state
+	 */
+	updateTabBarSelection(currentPath, color, selectedColor) {
+		const tabBarEl = this.el.querySelector('.dimina-mini-app__tabbar')
+		if (!tabBarEl) return
+
+		const items = tabBarEl.querySelectorAll('.dimina-tabbar-item')
+		const normalColor = color || this.appConfig?.app?.tabBar?.color || '#999999'
+		const activeColor = selectedColor || this.appConfig?.app?.tabBar?.selectedColor || '#1890ff'
+
+		items.forEach((item) => {
+			const path = item.getAttribute('data-path')
+			const isSelected = path === currentPath
+			const text = item.querySelector('.dimina-tabbar-text')
+			const defaultIcon = item.querySelector('.dimina-tabbar-icon-default')
+			const selectedIcon = item.querySelector('.dimina-tabbar-icon-selected')
+
+			// Update text color
+			if (text) {
+				text.style.color = isSelected ? activeColor : normalColor
+			}
+
+			// Update icon visibility
+			if (defaultIcon) {
+				defaultIcon.style.display = isSelected ? 'none' : 'block'
+			}
+			if (selectedIcon) {
+				selectedIcon.style.display = isSelected ? 'block' : 'none'
+			}
+
+			// Update item class
+			if (isSelected) {
+				item.classList.add('dimina-tabbar-item--selected')
+			}
+			else {
+				item.classList.remove('dimina-tabbar-item--selected')
+			}
+		})
 	}
 
 	navigateToMiniProgram(opts) {

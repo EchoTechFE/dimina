@@ -7,6 +7,25 @@
 
 import Foundation
 
+public struct DMPTabBarItem {
+    public var pagePath: String
+    public var text: String
+    public var iconPath: String?
+    public var selectedIconPath: String?
+}
+
+public struct DMPTabBarConfig {
+    public var color: String
+    public var selectedColor: String
+    public var backgroundColor: String
+    public var borderStyle: String  // "black" or "white"
+    public var list: [DMPTabBarItem]
+
+    public var tabPagePaths: Set<String> {
+        Set(list.map { $0.pagePath })
+    }
+}
+
 public class DMPBundleAppConfig {
     var data: [String: Any]
     var app: [String: Any]
@@ -17,17 +36,40 @@ public class DMPBundleAppConfig {
     var subPackages: [SubPackageConfig]
     var _entryPagePath: String
     var moduleMaps: [String: ModuleConfig]
-    
+    var tabBar: DMPTabBarConfig?
+
     init(data: [String: Any]) {
         self.data = data
         self.app = data["app"] as? [String: Any] ?? [:]
         self.modules = data["modules"] as? [String: Any] ?? [:]
-        
+
         self.pages = self.app["pages"] as? [String]
         self.style = self.app["style"] as? String ?? ""
         self.sitemapLocation = self.app["sitemapLocation"] as? String ?? ""
         self.subPackages = self.app["subPackages"] as? [SubPackageConfig] ?? []
         self._entryPagePath = self.app["entryPagePath"] as? String ?? ""
+
+        // Parse tabBar config
+        if let tabBarDict = self.app["tabBar"] as? [String: Any],
+           let list = tabBarDict["list"] as? [[String: Any]], !list.isEmpty {
+            let items = list.compactMap { itemDict -> DMPTabBarItem? in
+                guard let pagePath = itemDict["pagePath"] as? String,
+                      let text = itemDict["text"] as? String else { return nil }
+                return DMPTabBarItem(
+                    pagePath: pagePath,
+                    text: text,
+                    iconPath: itemDict["iconPath"] as? String,
+                    selectedIconPath: itemDict["selectedIconPath"] as? String
+                )
+            }
+            self.tabBar = DMPTabBarConfig(
+                color: tabBarDict["color"] as? String ?? "#999999",
+                selectedColor: tabBarDict["selectedColor"] as? String ?? "#1890ff",
+                backgroundColor: tabBarDict["backgroundColor"] as? String ?? "#ffffff",
+                borderStyle: tabBarDict["borderStyle"] as? String ?? "black",
+                list: items
+            )
+        }
         
         // 初始化 moduleMaps
         var maps = [String: ModuleConfig]()

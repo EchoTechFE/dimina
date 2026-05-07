@@ -30,11 +30,19 @@
         "material": {
           "certpath": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.cer",
           "keyAlias": "debugKey",
+<<<<<<< HEAD
           "keyPassword": "0000001BACAE04CD19AB29B759D181213B5E72DEAAD17471DFDE6BFC0BB71A49C62E2E3BB9376A727F0D98",
           "profile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p12",
           "storePassword": "0000001BE581559CDD56508891679A56B0790973815EFAC872F83F2696BF9FA02FF2877F1E7BE47924EE81"
+=======
+          "keyPassword": "0000001A043E412A08760C8C6F5169CD4D122312EFE59154DEC6EE98A54E349BE68590BE7A78160CEB5A",
+          "profile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p12",
+          "storePassword": "0000001ADFBC6764BD14C252668C5C00A716CE3B03FDCA46D3DA7403FCC36B88D0D4E56A2DEA7FC9331D"
+>>>>>>> 89a053e40a0a254b3fa21cd3604086b0232c35c2
         }
       }
     ]

@@ -12,8 +12,7 @@ import { DMPContainer } from '../Container/DMPContainer'
 import { DMPLogger } from '../EventTrack/DMPLogger'
 import { Tags } from '../EventTrack/Tags'
 import window from '@ohos.window'
-import { ImageKnife } from '@ohos/imageknife'
-import { DMPContainerBridgesModule } from '../Bridges/DMPContainerBridgesModule'
+import { ImageKnife } from '@ohos/imageknifepro'
 import { DMPWebViewController } from '../HybridContainer/DMPWebViewController'
 import { DMPAppModuleManager } from '../Bridges/DMPAppModuleManager'
 import { DMPWindowUtil } from '../Utils/DMPWindowUtils'
@@ -71,10 +70,6 @@ export class DMPApp {
 
   public get containerBridges(): DMPBridges {
     return this._containerBridges
-  }
-
-  public registerCustomBridge(module: DMPContainerBridgesModule, moduleName?: string): void {
-    this._appModuleManager.registerCustomBridge(module, moduleName)
   }
 
   public static get entryContext(): DMPEntryContext {

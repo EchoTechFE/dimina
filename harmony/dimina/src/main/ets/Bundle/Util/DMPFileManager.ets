@@ -194,9 +194,7 @@ export class DMPFileManager {
     } else {
       throw Error("解压JsApp底包失败")
     }
-
   }
-
 
   async copyJSSDKAndUnZip(version: string) {
     const jsSdkDir = this.getJSSdkDir()
