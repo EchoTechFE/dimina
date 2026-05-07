@@ -115,6 +115,14 @@ export struct DMPTabBarContainerView {
 
     const pagePath = this.tabBarConfig.list[index].pagePath
 
+    // Reuse existing page record from navigator stack (initial tab already created by preLoadPage)
+    const existingRecord = navigator.getNavigator().findPageRecordByPath(pagePath)
+    if (existingRecord) {
+      this.tabPageRecords.set(index, existingRecord)
+      DMPLogger.d(Tags.TABBAR, `Reused existing page record for tab ${index}: ${pagePath}, webViewId: ${existingRecord.webViewId}`)
+      return
+    }
+
     // Create new page record for this tab (not added to stack)
     DMPLogger.d(Tags.TABBAR, `Creating new page record for tab ${index}: ${pagePath}`)
     const pageRecord = navigator.getNavigator().createPageRecordForTab(pagePath)

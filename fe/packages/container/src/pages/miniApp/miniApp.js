@@ -24,9 +24,10 @@ export class MiniApp {
 			timer: null,
 		}
 		this.color = null
-		// TabBar support (multi-iframe approach)
-		this.tabBarPagePaths = new Set()
-		this.tabBarBridges = new Map()  // path -> bridge mapping
+		// TabBar 状态（参考鸿蒙 DMPTabBarContainerView 的"按需创建 + 持久缓存"模型）
+		this.tabBarPagePaths = new Set()  // app.tabBar.list 中声明的所有 tab 路径
+		this.tabBarBridges = new Map()    // pagePath -> bridge：懒加载的持久 tab 池
+		this.currentTabPath = null        // 当前激活的 tab 路径；null 表示当前不在任何 tab 页
 	}
 
 	viewDidLoad() {
@@ -56,12 +57,10 @@ export class MiniApp {
 
 		this.appConfig = JSON.parse(configContent)
 
-		// Initialize tabBar page paths if tabBar exists
 		if (this.appConfig.app.tabBar && this.appConfig.app.tabBar.list) {
 			this.tabBarPagePaths = new Set(
 				this.appConfig.app.tabBar.list.map((item) => item.pagePath),
 			)
-			console.log('📱 [initApp] TabBar 页面:', Array.from(this.tabBarPagePaths))
 		}
 
 		const entryPagePath = this.appInfo.pagePath || this.appConfig.app.entryPagePath
@@ -88,18 +87,20 @@ export class MiniApp {
 
 		this.bridgeList.push(entryPageBridge)
 
-		// If entry page is a tabBar page, store it in tabBarBridges for reuse
-		if (this.tabBarPagePaths.has(entryPagePath)) {
+		// 入口若是 tab 页：登记到 tab 池并设为当前 tab
+		const entryIsTabPage = this.tabBarPagePaths.has(entryPagePath)
+		if (entryIsTabPage) {
 			this.tabBarBridges.set(entryPagePath, entryPageBridge)
-			console.log('📱 [initApp] 入口页面是 TabBar 页面，已缓存:', entryPagePath)
+			this.currentTabPath = entryPagePath
 		}
 
 		entryPageBridge.start()
 		HashRouter.sync(this.appId, entryPagePath, this.appInfo.query)
 
-		// 7. 渲染 TabBar（如果存在）
+		// 7. 渲染 TabBar：仅在入口为 tab 页时显示
 		if (this.appConfig.app.tabBar) {
-			this.renderTabBar(this.appConfig.app.tabBar, entryPagePath)
+			this._renderTabBar(this.appConfig.app.tabBar)
+			this._setTabBarVisible(entryIsTabPage)
 		}
 
 		// 8.隐藏 loading
@@ -261,6 +262,9 @@ export class MiniApp {
 		bridge.webview.el.classList.remove('dimina-native-view--enter-anima')
 		bridge.webview.el.classList.remove('dimina-native-view--instage')
 
+		// navigateTo 总是进入非 tab 页（target 是 tab 页时按 wechat 规范应使用 switchTab），隐藏 TabBar
+		this._setTabBarVisible(false)
+
 		onSuccess?.()
 	}
 
@@ -278,54 +282,53 @@ export class MiniApp {
 		const onComplete = this.createCallbackFunction(complete)
 
 		try {
-			// 检查页面路径是否存在
 			const pageConfig = this.appConfig.modules[pagePath]
-			// 合并页面配置
 			const mergeConfig = mergePageConfig(this.appConfig.app, pageConfig)
 
-			// 更新状态栏颜色模式
 			this.updateTargetPageColorStyle(mergeConfig)
 
-			// 销毁所有现有的 bridge
-			while (this.bridgeList.length > 0) {
-				const bridge = this.bridgeList.pop()
+			// 销毁所有 bridge：当前可见栈 + tab 池（用 Set 去重，避免同一 bridge 被销毁两次）
+			const allBridges = new Set([...this.bridgeList, ...this.tabBarBridges.values()])
+			for (const bridge of allBridges) {
 				bridge.destroy()
-				if (bridge.webview && bridge.webview.el) {
-					bridge.webview.el.remove()
-				}
+				bridge.webview?.el?.remove()
 			}
+			this.bridgeList.length = 0
+			this.tabBarBridges.clear()
+			this.currentTabPath = null
 
-			// 清空 webviews 容器
 			if (this.webviewsContainer) {
 				this.webviewsContainer.innerHTML = ''
 			}
 
-			// 创建新的入口页面的 bridge
 			this.createBridge({
 				pagePath,
 				query,
 				scene: this.appInfo.scene,
 				jscore: this.jscore,
-				isRoot: true, // 作为根页面
+				isRoot: true,
 				root: pageConfig?.root || 'main',
 				appId: this.appInfo.appId,
 				pages: this.appConfig.app.pages,
 				configInfo: mergeConfig,
 			}).then((bridge) => {
-				// 添加到 bridgeList
 				this.bridgeList.push(bridge)
+				bridge.webview.el.style.zIndex = 1
 
-				// 启动新页面
+				// 入口若是 tab 页：登记到池并显示 TabBar
+				if (this.tabBarPagePaths.has(pagePath)) {
+					this.tabBarBridges.set(pagePath, bridge)
+					this.currentTabPath = pagePath
+					this._setTabBarVisible(true)
+					this._updateTabBarSelection(pagePath)
+				} else {
+					this._setTabBarVisible(false)
+				}
+
 				bridge.start()
 				HashRouter.sync(this.appId, pagePath, query)
 
-				// 设置 z-index
-				bridge.webview.el.style.zIndex = 1
-
-				// 恢复动画状态
 				this.webviewAnimaEnd = true
-
-				// 调用成功回调
 				onSuccess?.({ errMsg: 'reLaunch:ok' })
 				onComplete?.()
 			}).catch((error) => {

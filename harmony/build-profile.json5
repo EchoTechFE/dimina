@@ -30,11 +30,11 @@
         "material": {
           "certpath": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001A043E412A08760C8C6F5169CD4D122312EFE59154DEC6EE98A54E349BE68590BE7A78160CEB5A",
+          "keyPassword": "0000001BE4F3DB49FFB741EE316E60B3E51F5CE836E66D5FB5AD460946B3371E5CB99B18801E6AEE83B2D5",
           "profile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/Users/hierifer/.ohos/config/default_harmony_IJHoYWcdtqapWKVRlrpX8I67utSK4-z9d_SutEj2PMA=.p12",
-          "storePassword": "0000001ADFBC6764BD14C252668C5C00A716CE3B03FDCA46D3DA7403FCC36B88D0D4E56A2DEA7FC9331D"
+          "storePassword": "0000001BADD065DF97AAAD8DDFE72B570BE1912F18CA669077308F588C3741B1CE292382B84388A0BD43EE"
         }
       }
     ]
