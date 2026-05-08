@@ -63,7 +63,7 @@ export class MiniApp {
 			)
 		}
 
-		const entryPagePath = this.appInfo.pagePath || this.appConfig.app.entryPagePath
+		const entryPagePath = this._normalizePath(this.appInfo.pagePath || this.appConfig.app.entryPagePath)
 
 		// 4. 读取页面配置
 		const pageConfig = this.appConfig.modules[entryPagePath]
@@ -212,7 +212,9 @@ export class MiniApp {
 		this.webviewAnimaEnd = false
 
 		const { url, success } = opts
-		const { query, pagePath } = queryPath(url)
+		const queryResult = queryPath(url)
+		const query = queryResult.query
+		const pagePath = this._normalizePath(queryResult.pagePath)
 		const onSuccess = this.createCallbackFunction(success)
 
 		const pageConfig = this.appConfig.modules[pagePath]
@@ -276,7 +278,9 @@ export class MiniApp {
 		this.webviewAnimaEnd = false
 
 		const { url, success, fail, complete } = opts
-		const { query, pagePath } = queryPath(url)
+		const queryResult = queryPath(url)
+		const query = queryResult.query
+		const pagePath = this._normalizePath(queryResult.pagePath)
 		const onSuccess = this.createCallbackFunction(success)
 		const onFail = this.createCallbackFunction(fail)
 		const onComplete = this.createCallbackFunction(complete)
@@ -352,16 +356,26 @@ export class MiniApp {
 		this.webviewAnimaEnd = false
 
 		const { url, success } = opts
-		const { query, pagePath } = queryPath(url)
+		const queryResult = queryPath(url)
+		const query = queryResult.query
+		const pagePath = this._normalizePath(queryResult.pagePath)
 		const onSuccess = this.createCallbackFunction(success)
 
-		// 获取当前 bridge
 		const curBridge = this.bridgeList[this.bridgeList.length - 1]
+		const oldPath = this._normalizePath(curBridge.opts.pagePath)
 		const pageConfig = this.appConfig.modules[pagePath]
 		const mergeConfig = mergePageConfig(this.appConfig.app, pageConfig)
 
 		this.updateTargetPageColorStyle(mergeConfig)
-		// 更新 bridge
+
+		// redirect 会改变 bridge 的 pagePath 身份：若旧路径在 tab 池中则需移除
+		if (this.tabBarBridges.get(oldPath) === curBridge) {
+			this.tabBarBridges.delete(oldPath)
+			if (this.currentTabPath === oldPath) {
+				this.currentTabPath = null
+			}
+		}
+
 		curBridge.destroy()
 		curBridge.opts = {
 			...curBridge.opts,
@@ -372,6 +386,16 @@ export class MiniApp {
 		curBridge.resetStatus()
 		curBridge.start()
 		HashRouter.sync(this.appId, pagePath, query)
+
+		// redirect 目标若是 tab 页：登记到池并显示 TabBar
+		if (this.tabBarPagePaths.has(pagePath)) {
+			this.tabBarBridges.set(pagePath, curBridge)
+			this.currentTabPath = pagePath
+			this._setTabBarVisible(true)
+			this._updateTabBarSelection(pagePath)
+		} else {
+			this._setTabBarVisible(false)
+		}
 
 		this.webviewAnimaEnd = true
 		onSuccess?.()
@@ -419,145 +443,84 @@ export class MiniApp {
 		preBridge.webview.el.classList.remove('dimina-native-view--enter-anima')
 		preBridge.webview.el.classList.remove('dimina-native-view--instage')
 		currentBridge.webview.el.parentNode.removeChild(currentBridge.webview.el)
+
+		// 退到 tab 页则恢复 TabBar 显示
+		this._setTabBarVisible(this.tabBarPagePaths.has(this._normalizePath(preBridge.opts.pagePath)))
 	}
 
 	/**
-	 * Switch to a tabBar page (multi-iframe approach for WebView reuse)
-	 * Similar to HarmonyOS/iOS/Android container implementations
+	 * 切换 TabBar 页面（基于鸿蒙 DMPTabBarContainerView 的"按需创建 + 持久缓存"模型）
+	 * 流程：
+	 *   1. 当前可见栈顶 pageHide + display:none（无论 tab 还是非 tab 页）
+	 *   2. 销毁当前 tab 之上 navigateTo 进来的所有非 tab 覆盖页（destroy）
+	 *   3. 目标 tab 已在池里则复用 + pageShow；否则按需创建并 start（首次 onShow 由 service 在资源就绪时触发）
+	 *   4. 同步 currentTabPath / 选中态 / TabBar 显隐
 	 */
 	async switchTab(opts) {
-		console.log('🔄 [switchTab] 开始切换', opts)
+		const { url, success, fail, complete } = opts
+		const onSuccess = this.createCallbackFunction(success)
+		const onFail = this.createCallbackFunction(fail)
+		const onComplete = this.createCallbackFunction(complete)
+
+		let { query, pagePath } = queryPath(url)
+		if (pagePath.startsWith('/')) {
+			pagePath = pagePath.substring(1)
+		}
+
+		if (!this.tabBarPagePaths.has(pagePath)) {
+			onFail?.({ errMsg: 'switchTab:fail not a tabBar page' })
+			onComplete?.()
+			return
+		}
 
 		try {
-			const { url, success, fail, complete } = opts
-			console.log('  Step 1: 解析参数', { url, success, fail, complete })
-
-			let { query, pagePath } = queryPath(url)
-			console.log('  Step 2: 解析路径（原始）', { query, pagePath })
-
-			// Remove leading slash from pagePath to match tabBarPagePaths format
-			if (pagePath.startsWith('/')) {
-				pagePath = pagePath.substring(1)
-			}
-			console.log('  Step 2b: 去除前导斜杠后', { pagePath })
-
-			const onSuccess = this.createCallbackFunction(success)
-			const onFail = this.createCallbackFunction(fail)
-			const onComplete = this.createCallbackFunction(complete)
-			console.log('  Step 3: 创建回调函数')
-
-			// Check if this is a tabBar page
-			console.log('  Step 4: 检查是否为 tabBar 页面')
-			console.log('  tabBarPagePaths:', Array.from(this.tabBarPagePaths))
-			console.log('  pagePath:', pagePath)
-			console.log('  has(pagePath):', this.tabBarPagePaths.has(pagePath))
-
-			if (!this.tabBarPagePaths.has(pagePath)) {
-				console.warn('❌ [switchTab] 目标页面不是 tabBar 页面:', pagePath)
-				onFail?.({ errMsg: 'switchTab:fail not a tabBar page' })
-				onComplete?.()
-				return
-			}
-
-			console.log('✅ Step 5: 确认是 tabBar 页面，继续执行')
-
-			// Log current state
-			console.log('📊 [switchTab] 当前状态快照:')
-			console.log('  bridgeList 长度:', this.bridgeList.length)
-			console.log('  bridgeList 页面路径:', this.bridgeList.map(b => ({
-				id: b.id,
-				pagePath: b.opts.pagePath,
-				isTabBar: this.tabBarPagePaths.has(b.opts.pagePath)
-			})))
-			console.log('  tabBarBridges 数量:', this.tabBarBridges.size)
-
-			// Hide current page
-			console.log('  Step 6: 隐藏当前页面')
+			// 1. 隐藏当前可见的栈顶（无论是否 tab）：触发 pageHide 并 display:none
 			const currentBridge = this.bridgeList[this.bridgeList.length - 1]
-			console.log('  currentBridge:', currentBridge?.opts?.pagePath, 'id:', currentBridge?.id)
 			if (currentBridge) {
-				console.log('  👁️ 隐藏当前页面:', currentBridge.opts.pagePath)
 				currentBridge.pageHide()
 				currentBridge.webview.el.style.display = 'none'
-			} else {
-				console.log('  ⚠️ 没有当前页面需要隐藏')
 			}
 
-			// Remove all non-tabBar pages from stack
-			const nonTabBarBridges = this.bridgeList.filter(
-				(bridge) => !this.tabBarPagePaths.has(bridge.opts.pagePath),
-			)
-			if (nonTabBarBridges.length > 0) {
-				console.log(`  🗑️ 移除 ${nonTabBarBridges.length} 个非 tabBar 页面:`)
-				nonTabBarBridges.forEach((bridge) => {
-					console.log('    - 移除:', bridge.opts.pagePath, 'id:', bridge.id)
-					bridge.destroy()
-					if (bridge.webview?.el) {
-						bridge.webview.el.remove()
-					}
-					const index = this.bridgeList.indexOf(bridge)
-					if (index >= 0) {
-						this.bridgeList.splice(index, 1)
-					}
-				})
-				console.log('  清理后 bridgeList 长度:', this.bridgeList.length)
-				console.log('  清理后 bridgeList:', this.bridgeList.map(b => b.opts.pagePath))
-			}
-
-			// Check if target tabBar page exists
-			console.log('  Step 7: 查找目标 tabBar 页面')
-			console.log('  tabBarBridges keys:', Array.from(this.tabBarBridges.keys()))
-			let targetBridge = this.tabBarBridges.get(pagePath)
-			console.log('  targetBridge:', targetBridge)
-
-			if (targetBridge) {
-				// Reuse existing tabBar page
-				console.log('  ✅ 复用已存在的 tabBar 页面:', pagePath)
-				console.log('    targetBridge id:', targetBridge.id)
-				console.log('    targetBridge webview:', targetBridge.webview?.el)
-
-				// Show target page
-				targetBridge.webview.el.style.display = 'block'
-
-				// Remove animation classes to prevent white screen
-				targetBridge.webview.el.classList.remove('dimina-native-view--slide-out')
-				targetBridge.webview.el.classList.remove('dimina-native-view--enter-anima')
-				targetBridge.webview.el.classList.remove('dimina-native-view--instage')
-				console.log('    已设置 display = block 并清除动画类')
-
-				// Move to stack top if not already there
-				const index = this.bridgeList.indexOf(targetBridge)
-				console.log('    当前在栈中的位置:', index, '栈总长度:', this.bridgeList.length)
-				if (index >= 0 && index !== this.bridgeList.length - 1) {
-					this.bridgeList.splice(index, 1)
-					this.bridgeList.push(targetBridge)
-					console.log('    ✅ 更新栈顺序，移到栈顶')
-					console.log('    新栈顺序:', this.bridgeList.map(b => b.opts.pagePath))
-				} else if (index < 0) {
-					console.error('    ⚠️ 警告：targetBridge 不在 bridgeList 中！')
+			// 2. 销毁所有 navigateTo 进来的非 tab 覆盖页（已经 hide 过，直接 destroy）
+			for (let i = this.bridgeList.length - 1; i >= 0; i--) {
+				const b = this.bridgeList[i]
+				if (this.tabBarPagePaths.has(this._normalizePath(b.opts.pagePath))) {
+					continue
 				}
+				b.destroy()
+				b.webview?.el?.remove()
+				this.bridgeList.splice(i, 1)
+			}
 
-				// Trigger lifecycle
+			// 3. 取或创建目标 tab
+			let targetBridge = this.tabBarBridges.get(pagePath)
+			if (targetBridge) {
+				// 复用：恢复显示
+				targetBridge.webview.el.style.display = 'block'
+				targetBridge.webview.el.classList.remove(
+					'dimina-native-view--slide-out',
+					'dimina-native-view--enter-anima',
+					'dimina-native-view--instage',
+				)
+				// 移到栈顶
+				const idx = this.bridgeList.indexOf(targetBridge)
+				if (idx >= 0 && idx !== this.bridgeList.length - 1) {
+					this.bridgeList.splice(idx, 1)
+					this.bridgeList.push(targetBridge)
+				}
+				else if (idx < 0) {
+					this.bridgeList.push(targetBridge)
+				}
+				// 总是触发 pageShow：包括"切回同一 tab"的场景，确保 onShow 一定可被业务监听到
 				targetBridge.pageShow()
-				HashRouter.sync(this.appId, pagePath, query)
-
-				// Update TabBar selection
-				this.updateTabBarSelection(pagePath)
-
-				onSuccess?.({ errMsg: 'switchTab:ok' })
 			}
 			else {
-				// Create new tabBar page
-				console.log('  🆕 创建新的 tabBar 页面:', pagePath)
-
+				// 按需创建
 				const pageConfig = this.appConfig.modules[pagePath]
 				const mergeConfig = mergePageConfig(this.appConfig.app, pageConfig)
-
-				// Update status bar color
 				this.updateTargetPageColorStyle(mergeConfig)
 
-				// Create bridge
-				const bridge = await this.createBridge({
+				targetBridge = await this.createBridge({
 					pagePath,
 					query,
 					scene: this.appInfo.scene,
@@ -569,104 +532,74 @@ export class MiniApp {
 					configInfo: mergeConfig,
 				})
 
-				// Store in tabBar bridges map
-				this.tabBarBridges.set(pagePath, bridge)
+				this.tabBarBridges.set(pagePath, targetBridge)
+				this.bridgeList.push(targetBridge)
 
-				// Add to bridge list
-				this.bridgeList.push(bridge)
-
-				// Show the page
-				bridge.webview.el.style.display = 'block'
-				bridge.webview.el.style.zIndex = 1
-
-				// Remove animation classes to prevent white screen
-				bridge.webview.el.classList.remove('dimina-native-view--slide-out')
-				bridge.webview.el.classList.remove('dimina-native-view--enter-anima')
-				bridge.webview.el.classList.remove('dimina-native-view--instage')
-
-				// Start bridge
-				bridge.start()
-				HashRouter.sync(this.appId, pagePath, query)
-
-				// Update TabBar selection
-				this.updateTabBarSelection(pagePath)
-
-				console.log('  ✅ TabBar 页面创建完成')
-
-				onSuccess?.({ errMsg: 'switchTab:ok' })
+				targetBridge.webview.el.style.display = 'block'
+				targetBridge.webview.el.style.zIndex = 1
+				targetBridge.webview.el.classList.remove(
+					'dimina-native-view--before-enter',
+					'dimina-native-view--slide-out',
+					'dimina-native-view--enter-anima',
+					'dimina-native-view--instage',
+				)
+				targetBridge.start()  // 首次 onLoad/onShow 由 service 端在资源就绪后触发
 			}
 
-			onComplete?.()
+			// 4. 状态同步
+			this.currentTabPath = pagePath
+			HashRouter.sync(this.appId, pagePath, query)
+			this._updateTabBarSelection(pagePath)
+			this._setTabBarVisible(true)
 
-			// Final state snapshot
-			console.log('📊 [switchTab] 切换完成后的最终状态:')
-			console.log('  bridgeList 长度:', this.bridgeList.length)
-			console.log('  bridgeList 详情:', this.bridgeList.map(b => ({
-				pagePath: b.opts.pagePath,
-				id: b.id,
-				display: b.webview?.el?.style?.display
-			})))
-			console.log('  tabBarBridges 缓存:', Array.from(this.tabBarBridges.entries()).map(([path, bridge]) => ({
-				path,
-				bridgeId: bridge.id
-			})))
-			console.log('✅✅✅ [switchTab] 切换完成')
+			onSuccess?.({ errMsg: 'switchTab:ok' })
 		}
 		catch (error) {
-			console.error('❌❌❌ [switchTab] 捕获到错误:', error)
-			console.error('错误堆栈:', error.stack)
 			onFail?.({ errMsg: `switchTab:fail ${error.message}` })
+		}
+		finally {
 			onComplete?.()
 		}
 	}
 
 	/**
-	 * Render TabBar UI
+	 * 规范化 pagePath：去掉前导 '/'，与 app.tabBar.list 中声明的格式对齐
 	 */
-	renderTabBar(tabBarConfig, currentPath) {
-		console.log('📱 [renderTabBar] 开始渲染 TabBar')
-		console.log('📱 [renderTabBar] tabBarConfig:', tabBarConfig)
-		console.log('📱 [renderTabBar] currentPath:', currentPath)
+	_normalizePath(path) {
+		if (!path) return ''
+		return path.startsWith('/') ? path.substring(1) : path
+	}
 
+	/**
+	 * 渲染 TabBar UI（一次性渲染，后续通过 _setTabBarVisible / _updateTabBarSelection 调整）
+	 */
+	_renderTabBar(tabBarConfig) {
 		const tabBarEl = this.el.querySelector('.dimina-mini-app__tabbar')
-		if (!tabBarEl) {
-			console.error('❌ [renderTabBar] TabBar element not found!')
-			return
-		}
-		console.log('✅ [renderTabBar] TabBar 元素找到了')
+		if (!tabBarEl) return
 
-		const { color, selectedColor, backgroundColor, borderStyle, list } = tabBarConfig
-		console.log('📱 [renderTabBar] TabBar 配置 - list.length:', list?.length)
+		const { color, backgroundColor, borderStyle, list } = tabBarConfig
+		const borderColor = borderStyle === 'white' ? '#ffffff' : 'rgba(0, 0, 0, 0.2)'
+		const normalColor = color || '#999999'
 
-		// Generate TabBar HTML
-		const tabBarHTML = `
-			<div class="dimina-tabbar" style="
-				background-color: ${backgroundColor || '#ffffff'};
-				border-top: 0.5px solid ${borderStyle === 'white' ? '#ffffff' : 'rgba(0, 0, 0, 0.2)'};
-			">
+		tabBarEl.innerHTML = `
+			<div class="dimina-tabbar" style="background-color: ${backgroundColor || '#ffffff'}; border-top: 0.5px solid ${borderColor};">
 				${list
 					.map(
 						(item, index) => `
 					<div class="dimina-tabbar-item" data-path="${item.pagePath}" data-index="${index}">
 						${
 							item.iconPath
-								? `
-							<img class="dimina-tabbar-icon dimina-tabbar-icon-default"
-								src="${import.meta.env.BASE_URL}${this.appId}/main/${item.iconPath}"
-								alt="${item.text}" />
-							${
-								item.selectedIconPath
-									? `<img class="dimina-tabbar-icon dimina-tabbar-icon-selected"
-									src="${import.meta.env.BASE_URL}${this.appId}/main/${item.selectedIconPath}"
-									alt="${item.text}" />`
-									: ''
-							}
-						`
+								? `<img class="dimina-tabbar-icon dimina-tabbar-icon-default"
+									src="${import.meta.env.BASE_URL}${this.appId}/main/${item.iconPath}" alt="${item.text}" />
+								${
+									item.selectedIconPath
+										? `<img class="dimina-tabbar-icon dimina-tabbar-icon-selected"
+											src="${import.meta.env.BASE_URL}${this.appId}/main/${item.selectedIconPath}" alt="${item.text}" />`
+										: ''
+								}`
 								: ''
 						}
-						<span class="dimina-tabbar-text" style="color: ${color || '#999999'};">
-							${item.text}
-						</span>
+						<span class="dimina-tabbar-text" style="color: ${normalColor};">${item.text}</span>
 					</div>
 				`,
 					)
@@ -674,98 +607,56 @@ export class MiniApp {
 			</div>
 		`
 
-		tabBarEl.innerHTML = tabBarHTML
-		tabBarEl.style.display = 'block'
-		console.log('✅ [renderTabBar] TabBar HTML 已插入，display 设置为 block')
-
-		// Adjust webviews container to make room for TabBar
-		const webviewsContainer = this.el.querySelector('.dimina-mini-app__webviews')
-		if (webviewsContainer) {
-			webviewsContainer.style.bottom = '49px' // Make room for TabBar
-			console.log('✅ [renderTabBar] webviews bottom 设置为 49px')
-		} else {
-			console.warn('⚠️ [renderTabBar] webviews 容器未找到')
-		}
-
-		// Check if TabBar is visible
-		const computedStyle = window.getComputedStyle(tabBarEl)
-		console.log('📱 [renderTabBar] TabBar 样式检查:', {
-			display: computedStyle.display,
-			position: computedStyle.position,
-			zIndex: computedStyle.zIndex,
-			bottom: computedStyle.bottom,
-			height: computedStyle.height
-		})
-
-		// Bind click events
-		const items = tabBarEl.querySelectorAll('.dimina-tabbar-item')
-		console.log('📱 [renderTabBar] 查找到的 TabBar 项数量:', items.length)
-		items.forEach((item, index) => {
-			const path = item.getAttribute('data-path')
-			console.log(`📱 [renderTabBar] 为 Tab ${index} 绑定点击事件, path:`, path)
-
-			item.addEventListener('click', (e) => {
-				console.log(`🔘🔘🔘 [TabBar] ===== 点击事件触发 ===== Tab ${index}:`, path)
-				console.log('点击事件对象:', e)
-				e.stopPropagation()
-				this.switchTab({ url: `/${path}` })
-			})
-
-			// 添加鼠标悬停效果来测试元素是否可交互
-			item.addEventListener('mouseenter', () => {
-				console.log(`🖱️ [TabBar] 鼠标进入 Tab ${index}`)
-			})
-		})
-
-		// Set initial selected state
-		this.updateTabBarSelection(currentPath, color, selectedColor)
-
-		// Test: Add a global click listener to the TabBar container
+		// 事件委托：单个监听器即可处理所有 tab 项点击
 		tabBarEl.addEventListener('click', (e) => {
-			console.log('🔥🔥🔥 [TabBar] TabBar 容器被点击了！', e.target)
+			const item = e.target.closest('.dimina-tabbar-item')
+			if (!item) return
+			const path = item.getAttribute('data-path')
+			if (path) {
+				this.switchTab({ url: `/${path}` })
+			}
 		})
 
-		console.log('✅✅✅ [renderTabBar] TabBar 渲染完成 ✅✅✅')
+		this._updateTabBarSelection(this.currentTabPath)
 	}
 
 	/**
-	 * Update TabBar selected state
+	 * 控制 TabBar 容器及 webviews 容器的底部 padding
 	 */
-	updateTabBarSelection(currentPath, color, selectedColor) {
+	_setTabBarVisible(visible) {
+		const tabBarEl = this.el.querySelector('.dimina-mini-app__tabbar')
+		if (!tabBarEl) return
+		tabBarEl.style.display = visible ? 'block' : 'none'
+		const webviewsContainer = this.el.querySelector('.dimina-mini-app__webviews')
+		if (webviewsContainer) {
+			webviewsContainer.style.bottom = visible ? '49px' : '0'
+		}
+	}
+
+	/**
+	 * 仅更新选中态（颜色 / 图标 / class），不重渲染 TabBar
+	 */
+	_updateTabBarSelection(currentPath) {
 		const tabBarEl = this.el.querySelector('.dimina-mini-app__tabbar')
 		if (!tabBarEl) return
 
-		const items = tabBarEl.querySelectorAll('.dimina-tabbar-item')
-		const normalColor = color || this.appConfig?.app?.tabBar?.color || '#999999'
-		const activeColor = selectedColor || this.appConfig?.app?.tabBar?.selectedColor || '#1890ff'
+		const tabBarConfig = this.appConfig?.app?.tabBar
+		if (!tabBarConfig) return
 
-		items.forEach((item) => {
+		const normalColor = tabBarConfig.color || '#999999'
+		const selectedColor = tabBarConfig.selectedColor || '#1890ff'
+
+		tabBarEl.querySelectorAll('.dimina-tabbar-item').forEach((item) => {
 			const path = item.getAttribute('data-path')
 			const isSelected = path === currentPath
 			const text = item.querySelector('.dimina-tabbar-text')
 			const defaultIcon = item.querySelector('.dimina-tabbar-icon-default')
 			const selectedIcon = item.querySelector('.dimina-tabbar-icon-selected')
 
-			// Update text color
-			if (text) {
-				text.style.color = isSelected ? activeColor : normalColor
-			}
-
-			// Update icon visibility
-			if (defaultIcon) {
-				defaultIcon.style.display = isSelected ? 'none' : 'block'
-			}
-			if (selectedIcon) {
-				selectedIcon.style.display = isSelected ? 'block' : 'none'
-			}
-
-			// Update item class
-			if (isSelected) {
-				item.classList.add('dimina-tabbar-item--selected')
-			}
-			else {
-				item.classList.remove('dimina-tabbar-item--selected')
-			}
+			if (text) text.style.color = isSelected ? selectedColor : normalColor
+			if (defaultIcon) defaultIcon.style.display = isSelected ? 'none' : 'block'
+			if (selectedIcon) selectedIcon.style.display = isSelected ? 'block' : 'none'
+			item.classList.toggle('dimina-tabbar-item--selected', isSelected)
 		})
 	}
 
@@ -1007,101 +898,215 @@ export class MiniApp {
 		this.hideLoading(opts)
 	}
 
-	showModal(opts) {
-		const { content = '', cancelText = '取消', confirmText = '确定', success, complete } = opts
+	showModal(opts = {}) {
+		const {
+			title = '',
+			content = '',
+			showCancel = true,
+			cancelText = '取消',
+			cancelColor = '#000000',
+			confirmText = '确定',
+			confirmColor = '#576b95',
+			success,
+			fail,
+			complete,
+		} = opts
+
 		const onSuccess = this.createCallbackFunction(success)
+		const onFail = this.createCallbackFunction(fail)
 		const onComplete = this.createCallbackFunction(complete)
 
-		// 遮罩层
+		// 单调递增的层级序号，保证后弹出的 modal 能覆盖之前的（即使先开的没关）
+		// 每个 modal 占两层：mask 偶数、dialog 奇数（dialog 始终在自己的 mask 之上）
+		this._modalDepth = (this._modalDepth || 0) + 1
+		const baseZ = 2000
+		const maskZ = baseZ + this._modalDepth * 2
+		const dialogZ = maskZ + 1
+
 		const mask = document.createElement('div')
 		mask.className = 'dimina-dialog-mask'
-		// 弹窗内容
+		mask.style.zIndex = String(maskZ)
+
 		const dialog = document.createElement('div')
 		dialog.className = 'dimina-dialog'
-		dialog.innerHTML = `<p>${content}</p>
-		<div>
-			<a id="cancelBtn" class="dimina-dialog__button" href="javascript:">${cancelText}</a>
-			<a id="confirmBtn" class="dimina-dialog__button" style="color: #576b95;" href="javascript:">${confirmText}</a>
-    	</div>`
+		dialog.style.zIndex = String(dialogZ)
 
-		const cleanup = () => {
-			mask.remove()
-			dialog.remove()
+		// 用 DOM API 构造，textContent 自动转义，避免 content/title 注入 HTML
+		if (title) {
+			const titleEl = document.createElement('h3')
+			titleEl.className = 'dimina-dialog__title'
+			titleEl.textContent = title
+			dialog.appendChild(titleEl)
 		}
 
-		dialog.querySelector('#cancelBtn').addEventListener('click', () => {
-			cleanup()
-			onSuccess?.({ cancel: true })
+		const contentEl = document.createElement('p')
+		contentEl.className = 'dimina-dialog__content'
+		contentEl.textContent = content
+		dialog.appendChild(contentEl)
+
+		const buttonRow = document.createElement('div')
+		buttonRow.className = 'dimina-dialog__buttons'
+
+		let cancelBtn = null
+		if (showCancel) {
+			cancelBtn = document.createElement('button')
+			cancelBtn.type = 'button'
+			cancelBtn.className = 'dimina-dialog__button'
+			cancelBtn.textContent = cancelText
+			cancelBtn.style.color = cancelColor
+			buttonRow.appendChild(cancelBtn)
+		}
+
+		const confirmBtn = document.createElement('button')
+		confirmBtn.type = 'button'
+		confirmBtn.className = 'dimina-dialog__button'
+		confirmBtn.textContent = confirmText
+		confirmBtn.style.color = confirmColor
+		buttonRow.appendChild(confirmBtn)
+
+		dialog.appendChild(buttonRow)
+
+		// 退出过程：先去掉 .show 触发渐出，动画结束再 remove DOM
+		// 每个 modal 独立管理自己的 dismiss，互不干扰；多 modal 叠加时按用户操作顺序逐个关闭
+		let resolved = false
+		const dismiss = () => {
+			if (resolved) return
+			resolved = true
+			mask.classList.remove('show')
+			dialog.classList.remove('show')
+			setTimeout(() => {
+				mask.remove()
+				dialog.remove()
+			}, 200)
+		}
+
+		const handleCancel = () => {
+			dismiss()
+			onSuccess?.({ cancel: true, confirm: false, errMsg: 'showModal:ok' })
 			onComplete?.()
-		})
-		dialog.querySelector('#confirmBtn').addEventListener('click', () => {
-			cleanup()
-			onSuccess?.({ confirm: true })
+		}
+		const handleConfirm = () => {
+			dismiss()
+			onSuccess?.({ confirm: true, cancel: false, errMsg: 'showModal:ok' })
 			onComplete?.()
-		})
-		mask.onclick = cleanup
+		}
+
+		cancelBtn?.addEventListener('click', handleCancel)
+		confirmBtn.addEventListener('click', handleConfirm)
+		// 微信规范：showCancel:false 时点击遮罩不关闭，强制用户操作 confirm 按钮
+		if (showCancel) {
+			mask.addEventListener('click', handleCancel)
+		}
 
 		this.webviewsContainer.appendChild(mask)
 		this.webviewsContainer.appendChild(dialog)
-		// 动画效果可选
-		setTimeout(() => {
+
+		// 触发渐入：等浏览器把初始 opacity:0 + scale(0.9) 应用一帧后再加 .show
+		requestAnimationFrame(() => {
 			mask.classList.add('show')
 			dialog.classList.add('show')
-		}, 10)
+		})
 	}
 
-	showActionSheet(opts) {
-		const { itemList = [], itemColor = '#000', success, fail, complete } = opts || {}
+	showActionSheet(opts = {}) {
+		const {
+			itemList = [],
+			itemColor = '#000000',
+			alertText = '',
+			success,
+			fail,
+			complete,
+		} = opts
+
+		const onSuccess = this.createCallbackFunction(success)
+		const onFail = this.createCallbackFunction(fail)
+		const onComplete = this.createCallbackFunction(complete)
+
+		// 参数校验：微信规范 itemList 必须为非空数组、长度 ≤ 6
 		if (!Array.isArray(itemList) || itemList.length === 0) {
-			fail && this.createCallbackFunction(fail)({ errMsg: 'showActionSheet:fail' })
-			complete && this.createCallbackFunction(complete)()
+			onFail?.({ errMsg: 'showActionSheet:fail invalid itemList' })
+			onComplete?.()
 			return
 		}
-		// 创建遮罩层
+		if (itemList.length > 6) {
+			onFail?.({ errMsg: 'showActionSheet:fail itemList must be no more than 6' })
+			onComplete?.()
+			return
+		}
+
+		// 互斥：先关掉上一次未关闭的 action sheet
+		this._dismissActionSheet?.()
+
 		const mask = document.createElement('div')
 		mask.className = 'dimina-action-sheet-mask'
-		// 创建 action sheet 容器
+
 		const sheet = document.createElement('div')
 		sheet.className = 'dimina-action-sheet'
 
-		// 清理方法
-		const cleanup = () => {
-			mask.remove()
-			sheet.remove()
+		// 警示文字（wechat 8.0+ 字段）
+		if (alertText) {
+			const alertEl = document.createElement('div')
+			alertEl.className = 'dimina-action-sheet-alert'
+			alertEl.textContent = alertText
+			sheet.appendChild(alertEl)
 		}
-		// 选项
+
+		// 退出过程：先去掉 .show 触发渐出，动画结束再 remove
+		let resolved = false
+		const dismiss = () => {
+			if (resolved) return
+			resolved = true
+			mask.classList.remove('show')
+			sheet.classList.remove('show')
+			setTimeout(() => {
+				mask.remove()
+				sheet.remove()
+				if (this._dismissActionSheet === dismiss) {
+					this._dismissActionSheet = null
+				}
+			}, 200)
+		}
+		this._dismissActionSheet = dismiss
+
+		const handleSelect = (idx) => {
+			dismiss()
+			onSuccess?.({ tapIndex: idx, errMsg: 'showActionSheet:ok' })
+			onComplete?.()
+		}
+		const handleCancel = () => {
+			dismiss()
+			onFail?.({ errMsg: 'showActionSheet:fail cancel' })
+			onComplete?.()
+		}
+
 		itemList.forEach((item, idx) => {
-			const btn = document.createElement('div')
+			const btn = document.createElement('button')
+			btn.type = 'button'
 			btn.className = 'dimina-action-sheet-item'
 			btn.style.color = itemColor
-			btn.textContent = item
-			btn.onclick = () => {
-				cleanup()
-				success && this.createCallbackFunction(success)({ tapIndex: idx })
-				complete && this.createCallbackFunction(complete)()
-			}
+			btn.textContent = String(item)
+			btn.addEventListener('click', () => handleSelect(idx))
 			sheet.appendChild(btn)
 		})
-		// 取消按钮
-		const cancelBtn = document.createElement('div')
+
+		const cancelBtn = document.createElement('button')
+		cancelBtn.type = 'button'
 		cancelBtn.className = 'dimina-action-sheet-cancel'
 		cancelBtn.textContent = '取消'
-		cancelBtn.onclick = () => {
-			cleanup()
-			fail && this.createCallbackFunction(fail)({ errMsg: 'showActionSheet:fail cancel' })
-			complete && this.createCallbackFunction(complete)()
-		}
+		cancelBtn.addEventListener('click', handleCancel)
 		sheet.appendChild(cancelBtn)
 
-		mask.onclick = cleanup
-		// 挂载到 webviewsContainer
+		// 点击遮罩等同于取消（wechat 规范）
+		mask.addEventListener('click', handleCancel)
+
 		this.webviewsContainer.appendChild(mask)
 		this.webviewsContainer.appendChild(sheet)
-		// 动画效果
-		setTimeout(() => {
-			sheet.classList.add('show')
+
+		// 等浏览器把初始态绘一帧后再加 .show 触发渐入
+		requestAnimationFrame(() => {
 			mask.classList.add('show')
-		}, 10)
+			sheet.classList.add('show')
+		})
 	}
 
 	setNavigationBarTitle(opts) {
