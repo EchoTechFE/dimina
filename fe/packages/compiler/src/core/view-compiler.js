@@ -9,6 +9,7 @@ import { compileTemplate } from '@vue/compiler-sfc'
 import * as cheerio from 'cheerio'
 import { transform } from 'esbuild'
 import * as htmlparser2 from 'htmlparser2'
+import { checkTemplateCompatibility } from '../common/compatibility.js'
 import { collectAssets, getAbsolutePath, tagWhiteList, transformRpx } from '../common/utils.js'
 import { getAppId, getComponent, getContentByPath, getTargetPath, getWorkPath, resetStoreInfo } from '../env.js'
 import { parseBindings } from '../common/expression-parser.js'
@@ -926,12 +927,17 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 	if (!fullPath) {
 		return { tpl: undefined }
 	}
+	const diagnosticSource = fullPath.startsWith(workPath)
+		? fullPath.slice(workPath.length)
+		: path
 	let content = getContentByPath(fullPath).trim()
 	if (!content) {
 		// 空文件内容，防止编译出错
 		content = '<block></block>'
 	}
 	else {
+		checkTemplateCompatibility(content, diagnosticSource, components)
+
 		if (isComponent) {
 			// TODO: 实现 componentPlaceholder，https://developers.weixin.qq.com/miniprogram/dev/framework/custom-component/placeholder.html
 			// 自定义组件统一添加根节点，，手动声明继承关系来移除 wrapper 节点， https://cn.vuejs.org/guide/components/attrs#nested-component-inheritance
@@ -974,6 +980,9 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 			const includeFullPath = getAbsolutePath(workPath, path, src)
 			// 计算被包含文件的路径（去掉扩展名），用于 wxs 路径解析
 			let includePath = includeFullPath.replace(workPath, '').replace(/\.(wxml|ddml)$/, '')
+			const includeDiagnosticSource = includeFullPath.startsWith(workPath)
+				? includeFullPath.slice(workPath.length)
+				: includePath
 			
 			// 确保路径以 / 开头
 			if (!includePath.startsWith('/')) {
@@ -982,6 +991,8 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 			
 			const includeContent = getContentByPath(includeFullPath).trim()
 			if (includeContent) {
+				checkTemplateCompatibility(includeContent, includeDiagnosticSource, components)
+
 				const $includeContent = cheerio.load(includeContent, {
 					xmlMode: true,
 					decodeEntities: false,
@@ -1039,6 +1050,9 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 		if (src) {
 			const importFullPath = getAbsolutePath(workPath, path, src)
 			let importPath = importFullPath.replace(workPath, '').replace(/\.(wxml|ddml)$/, '')
+			const importDiagnosticSource = importFullPath.startsWith(workPath)
+				? importFullPath.slice(workPath.length)
+				: importPath
 			
 			// 确保路径以 / 开头
 			if (!importPath.startsWith('/')) {
@@ -1047,6 +1061,8 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 			
 			const importContent = getContentByPath(importFullPath).trim()
 			if (importContent) {
+				checkTemplateCompatibility(importContent, importDiagnosticSource, components)
+
 				const $$ = cheerio.load(importContent, {
 					xmlMode: true,
 					decodeEntities: false,

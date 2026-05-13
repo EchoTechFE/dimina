@@ -5,6 +5,7 @@ import { parseSync } from 'oxc-parser'
 import { walk } from 'oxc-walker'
 import MagicString from 'magic-string'
 import { transform } from 'esbuild'
+import { getWxMemberName, warnUnsupportedWxApi } from '../common/compatibility.js'
 import { collectAssets, hasCompileInfo } from '../common/utils.js'
 import { getAppConfigInfo, getAppId, getComponent, getContentByPath, getNpmResolver, getTargetPath, getWorkPath, resetStoreInfo, resolveAppAlias } from '../env.js'
 import { mergeSourcemap, remapSourcemap } from './sourcemap.js'
@@ -161,6 +162,9 @@ async function buildJSByPath(packageName, module, compileRes, mainCompileRes, ad
 		console.warn('[logic]', `找不到模块文件: ${src}`)
 		return
 	}
+	const diagnosticSource = modulePath.startsWith(getWorkPath())
+		? modulePath.slice(getWorkPath().length)
+		: src
 	
 	const sourceCode = getContentByPath(modulePath)
 	if (!sourceCode) {
@@ -257,6 +261,15 @@ async function buildJSByPath(packageName, module, compileRes, mainCompileRes, ad
 
 	walk(ast, {
 		enter(node, parent) {
+			const wxMemberName = getWxMemberName(node)
+			if (wxMemberName) {
+				warnUnsupportedWxApi(
+					wxMemberName,
+					compileInfo.sourceFile || diagnosticSource,
+					node.loc?.start?.line || getLineByIndex(sourceCode, node.start),
+				)
+			}
+
 			if ((node.type === 'StringLiteral' || node.type === 'Literal') && isLocalAssetString(node.value)) {
 				pathReplacements.push({
 					start: node.start,
@@ -437,6 +450,20 @@ function isLocalAssetString(value) {
 		&& !value.startsWith('//')
 		&& (value.startsWith('/') || value.startsWith('./') || value.startsWith('../'))
 		&& /\.(?:png|jpe?g|gif|svg)(?:\?.*)?$/.test(value)
+}
+
+function getLineByIndex(content, index) {
+	if (typeof index !== 'number' || index < 0) {
+		return null
+	}
+
+	let line = 1
+	for (let i = 0; i < index; i++) {
+		if (content.charCodeAt(i) === 10) {
+			line++
+		}
+	}
+	return line
 }
 
 /**
