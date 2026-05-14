@@ -320,10 +320,10 @@ class Runtime {
 
 		const { accessCache, ctx } = internal
 		for (const [key, value] of Object.entries(changedData)) {
-			if (accessCache && Object.hasOwn(accessCache, key)) {
+			if (accessCache && Object.prototype.hasOwnProperty.call(accessCache, key)) {
 				delete accessCache[key]
 			}
-			if (ctx && !Object.hasOwn(ctx, key)) {
+			if (ctx && !Object.prototype.hasOwnProperty.call(ctx, key)) {
 				ctx[key] = value
 			}
 		}
@@ -568,7 +568,7 @@ class Runtime {
 				this.preInitUpdates.set(moduleId, pendingUpdate)
 			}
 			for (const key in data) {
-				if (!Object.hasOwn(setupData, key)) {
+				if (!Object.prototype.hasOwnProperty.call(setupData, key)) {
 					hasNewReactiveKey = true
 					newKeys[key] = data[key]
 				}
@@ -762,6 +762,10 @@ class Runtime {
 		catch (error) {
 			console.error('[system]', '[render]', 'selectorQuery error:', error)
 		}
+	}
+
+	videoContext(opts) {
+		message.event.emit('videoContext', opts.params)
 	}
 
 	/**

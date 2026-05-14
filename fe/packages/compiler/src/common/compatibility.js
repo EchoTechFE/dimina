@@ -1,10 +1,5 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import process from 'node:process'
-import { fileURLToPath } from 'node:url'
 import { Parser } from 'htmlparser2'
-
-const DOC_RELATIVE_PATH = 'docs/API-Reference.md'
+import { supportedBuiltinComponents, supportedWxApis } from './compatibility-reference.js'
 
 let cachedReference = null
 const warnedItems = new Set()
@@ -14,35 +9,11 @@ function loadReference() {
 		return cachedReference
 	}
 
-	const docPath = findApiReferencePath()
-	if (!docPath) {
-		console.warn('[compat]', `API reference not found: ${DOC_RELATIVE_PATH}`)
-		cachedReference = {
-			supportedBuiltinComponents: new Set(),
-			supportedWxApis: new Set(),
-		}
-		return cachedReference
+	cachedReference = {
+		supportedBuiltinComponents: new Set(supportedBuiltinComponents),
+		supportedWxApis: new Set(supportedWxApis),
 	}
-
-	const content = fs.readFileSync(docPath, 'utf-8')
-	cachedReference = parseApiReference(content)
 	return cachedReference
-}
-
-function findApiReferencePath() {
-	const candidates = [
-		path.resolve(process.cwd(), DOC_RELATIVE_PATH),
-		path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../..', DOC_RELATIVE_PATH),
-		path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..', DOC_RELATIVE_PATH),
-	]
-
-	for (const candidate of candidates) {
-		if (fs.existsSync(candidate)) {
-			return candidate
-		}
-	}
-
-	return null
 }
 
 function parseApiReference(content) {

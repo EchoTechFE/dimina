@@ -1,9 +1,24 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkTemplateCompatibility, getWxMemberName, parseApiReference, warnUnsupportedWxApi } from '../src/common/compatibility.js'
+import { checkTemplateCompatibility, getWxMemberName, loadReference, parseApiReference, warnUnsupportedWxApi } from '../src/common/compatibility.js'
 
 describe('compatibility diagnostics', () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
+	})
+
+	it('keeps bundled compatibility reference in sync with API reference markdown', () => {
+		const content = fs.readFileSync(path.resolve(import.meta.dirname, '../../../../docs/API-Reference.md'), 'utf-8')
+		const parsedReference = parseApiReference(content)
+		const bundledReference = loadReference()
+
+		expect([...bundledReference.supportedBuiltinComponents].sort()).toEqual(
+			[...parsedReference.supportedBuiltinComponents].sort(),
+		)
+		expect([...bundledReference.supportedWxApis].sort()).toEqual(
+			[...parsedReference.supportedWxApis].sort(),
+		)
 	})
 
 	it('parses supported APIs and components from API reference markdown', () => {
