@@ -1,5 +1,7 @@
 import { DMPExportModule } from './DMPExportModule';
 import { DMPContainerBridgesModule } from './DMPContainerBridgesModule';
+import { DMPContainerBridgesModuleExt } from './DMPContainerBridgesModule+Ext';
+import { DMPExtModuleHandler } from './DMPExtModuleHandler';
 import { DMPLogger } from '../EventTrack/DMPLogger';
 import { Tags } from '../EventTrack/Tags';
 import { DMPMap } from '../Utils/DMPMap';
@@ -21,17 +23,21 @@ export abstract class DMPModuleManager {
   }
 
   /**
-   * 自定义 Bridge 的统一注册入口（host 扩展使用）。
-   * - 不传 moduleName：方法注册到默认模块 'DMPContainerBridgesModule'，JS 直接按方法名调用，
-   *   同名方法会覆盖内置实现，可用于替换内置 bridge。
-   * - 传 moduleName：注册到独立模块，JS 调用时需要在 params 里指定 module 字段。
+   * 注册宿主第三方扩展模块。
+   * 首次调用时会自动创建 DMPContainerBridgesModuleExt 并绑定到当前 app。
+   * 默认不支持（Worker 线程等场景），子类按需覆盖。
+   *
+   * @param moduleName  宿主模块名（对应 extBridge/extOnBridge 中的 module 参数）
+   * @param handler     模块处理函数
    */
-  registerCustomBridge(moduleObject: DMPContainerBridgesModule, moduleName?: string) {
-    if (moduleName) {
-      this.registerCustomModule(moduleObject, moduleName)
-    } else {
-      this.registerModule(moduleObject)
-    }
+  registerExtModule(_moduleName: string, _handler: DMPExtModuleHandler): void {}
+
+  /**
+   * 获取当前 ext bridge 模块实例（未注册或不支持时返回 null）。
+   * 默认返回 null，子类按需覆盖。
+   */
+  getExtBridgeModule(): DMPContainerBridgesModuleExt | null {
+    return null;
   }
 
   getModuleObjectByMethodName(methodName: string): DMPContainerBridgesModule | null {

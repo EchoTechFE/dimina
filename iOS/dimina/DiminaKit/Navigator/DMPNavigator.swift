@@ -35,6 +35,7 @@ public class DMPNavigator: NSObject {
 
     // 页面记录
     private var pageRecords: [DMPPageRecord] = []
+    private weak var tabBarContainerController: DMPTabBarContainerController?
 
     // 公开初始化方法
     public init(app: DMPApp? = nil) {
@@ -54,31 +55,38 @@ public class DMPNavigator: NSObject {
         navigationController.interactivePopGestureRecognizer?.isEnabled = false
     }
 
-    // MARK: - TabBar Setup
-
-    /// 当 app-config 包含 tabBar 时调用，创建容器 VC 并切换内层导航
-    @MainActor
-    public func setupTabBarContainer(tabBarConfig: DMPTabBarConfig) {
-        guard let outerNavController = outerNavigationController else { return }
-
-        // 记录所有 tabBar 页面路径
-        tabBarPagePaths = tabBarConfig.tabPagePaths
-
-        // 创建容器 VC（内含 innerNavigationController）
-        let containerVC = DMPTabBarContainerViewController(tabBarConfig: tabBarConfig, app: app)
-        containerVC.navigator = self
-        tabBarContainerVC = containerVC
-
-        // 将内层 nav controller 注册到关联对象，用于页面导航
-        let innerNavController = containerVC.innerNavigationController
-        innerNavController.interactivePopGestureRecognizer?.isEnabled = false
-        self.navigationController = innerNavController
-
-        // 将容器 VC 推入外层导航栈
-        outerNavController.pushViewController(containerVC, animated: true)
+    public func pageRecord(webViewId: Int) -> DMPPageRecord? {
+        return pageRecords.first(where: { $0.webViewId == webViewId })
     }
 
-    // MARK: - Back Button
+    private func isTabBarPage(_ pagePath: String) -> Bool {
+        return app?.getBundleAppConfig()?.isTabBarPage(pagePath: pagePath) ?? false
+    }
+
+    private func tabBarIndex(for pagePath: String) -> Int {
+        return app?.getBundleAppConfig()?.getTabBarIndex(pagePath: pagePath) ?? -1
+    }
+
+    private func currentTabBarContainer() -> DMPTabBarContainerController? {
+        if let tabBarContainerController {
+            return tabBarContainerController
+        }
+
+        return navigationController?.viewControllers.first {
+            $0 is DMPTabBarContainerController
+        } as? DMPTabBarContainerController
+    }
+
+    private func updateRootTabRecord(_ pageRecord: DMPPageRecord) {
+        if pageRecords.isEmpty {
+            pageRecords.append(pageRecord)
+        } else {
+            pageRecords[0] = pageRecord
+            if pageRecords.count > 1 {
+                pageRecords.removeSubrange(1..<pageRecords.count)
+            }
+        }
+    }
 
     /// 创建自定义返回按钮
     public func createBackButton(darkStyle: Bool = false) -> UIBarButtonItem {
@@ -111,21 +119,56 @@ public class DMPNavigator: NSObject {
 
     /// 启动到指定页面（首页）
     @MainActor
-    public func launch(to path: String, query: [String: Any]? = nil, animated: Bool = true) async {
+    public func launch(
+        to path: String, query: [String: Any]? = nil, animated: Bool = true,
+        showsLaunchLoading: Bool = true
+    ) async {
         guard let navigationController = navigationController else {
             print("导航控制器未设置")
             return
         }
 
+        navigationController.view.endEditing(true)
         pageLifecycle?.onHide(webviewId: app!.getCurrentWebViewId())
 
+        if let tabBarConfig = app?.getBundleAppConfig()?.tabBar,
+           isTabBarPage(path)
+        {
+            let tabBarController = DMPTabBarContainerController(
+                initialPath: path,
+                query: query,
+                appConfig: app!.getAppConfig()!,
+                app: app,
+                navigator: self,
+                tabBarConfig: tabBarConfig,
+                showsLaunchLoading: showsLaunchLoading
+            )
+
+            guard let pageRecord = await tabBarController.prepareInitialTab() else {
+                return
+            }
+
+            pageRecords.append(pageRecord)
+            tabBarContainerController = tabBarController
+
+            if showsLaunchLoading {
+                tabBarController.preparePageLoading(in: navigationController)
+            }
+            navigationController.pushViewController(tabBarController, animated: animated)
+
+            pageLifecycle?.onShow(webviewId: pageRecord.webViewId)
+            return
+        }
+
+        // 使用DMPPageController创建页面
         let pageController = DMPPageController(
             pagePath: path,
             query: query,
             appConfig: app!.getAppConfig()!,
             app: app,
             navigator: self,
-            isRoot: true
+            isRoot: true,
+            showsLaunchLoading: showsLaunchLoading
         )
 
         let pageRecord = DMPPageRecord(
@@ -137,6 +180,9 @@ public class DMPNavigator: NSObject {
 
         await app?.service?.loadSubPackage(pagePath: path)
 
+        if showsLaunchLoading {
+            pageController.preparePageLoading(in: navigationController)
+        }
         navigationController.pushViewController(pageController, animated: animated)
 
         pageLifecycle?.onShow(webviewId: pageController.getWebView().getWebViewId())
@@ -147,6 +193,12 @@ public class DMPNavigator: NSObject {
     public func navigateTo(to path: String, query: [String: Any]? = nil, animated: Bool = true) async {
         guard let navigationController = navigationController else {
             print("导航控制器未设置")
+            return
+        }
+
+        navigationController.view.endEditing(true)
+        if isTabBarPage(path) {
+            print("navigateTo failed: can not navigateTo a tabbar page: \(path)")
             return
         }
 
@@ -185,6 +237,8 @@ public class DMPNavigator: NSObject {
             return
         }
 
+        navigationController.view.endEditing(true)
+        // 检查是否可以返回
         if navigationController.viewControllers.count <= 1 {
             if destroy {
                 // 有 tabBar 容器时 pop 外层，否则 destroy
@@ -203,6 +257,8 @@ public class DMPNavigator: NSObject {
 
         if targetIndex == 0 {
             pageLifecycle?.onUnload(webviewId: app!.getCurrentWebViewId())
+            tabBarContainerController?.destroy()
+            tabBarContainerController = nil
             pageRecords.removeAll()
             navigationController.popToRootViewController(animated: animated)
             return
@@ -228,6 +284,12 @@ public class DMPNavigator: NSObject {
     public func redirectTo(to path: String, query: [String: Any]? = nil) async {
         guard let navigationController = navigationController else {
             print("导航控制器未设置")
+            return
+        }
+
+        navigationController.view.endEditing(true)
+        if isTabBarPage(path) {
+            print("redirectTo failed: can not redirectTo a tabbar page: \(path)")
             return
         }
 
@@ -302,10 +364,101 @@ public class DMPNavigator: NSObject {
             return
         }
 
+        navigationController.view.endEditing(true)
+        pageRecords.reversed().forEach { pageLifecycle?.onUnload(webviewId: $0.webViewId) }
+        tabBarContainerController?.destroy()
+        tabBarContainerController = nil
         navigationController.popToRootViewController(animated: animated)
         pageRecords.removeAll()
 
-        await launch(to: path, query: query, animated: animated)
+        await launch(to: path, query: query, animated: animated, showsLaunchLoading: false)
+    }
+
+    @MainActor
+    @discardableResult
+    public func switchTab(to path: String, query: [String: Any]? = nil, animated: Bool = true) async -> Bool {
+        guard let navigationController = navigationController else {
+            print("导航控制器未设置")
+            return false
+        }
+
+        guard let tabBarConfig = app?.getBundleAppConfig()?.tabBar else {
+            print("switchTab failed: tabBar config not found")
+            return false
+        }
+
+        let targetIndex = tabBarIndex(for: path)
+        guard targetIndex >= 0 else {
+            print("switchTab failed: target is not a tabbar page: \(path)")
+            return false
+        }
+
+        navigationController.view.endEditing(true)
+
+        if let tabBarController = currentTabBarContainer() {
+            let previousRecord = tabBarController.selectedPageRecord ?? pageRecords.first
+            let wasPreviousTabVisible = navigationController.topViewController === tabBarController
+                && pageRecords.count <= 1
+
+            if navigationController.topViewController !== tabBarController {
+                while pageRecords.count > 1 {
+                    if let record = pageRecords.last {
+                        pageLifecycle?.onUnload(webviewId: record.webViewId)
+                    }
+                    pageRecords.removeLast()
+                }
+                navigationController.popToViewController(tabBarController, animated: animated)
+            }
+
+            if wasPreviousTabVisible,
+               let previousRecord,
+               previousRecord.webViewId != tabBarController.pageRecord(at: targetIndex)?.webViewId
+            {
+                pageLifecycle?.onHide(webviewId: previousRecord.webViewId)
+            }
+
+            guard let currentRecord = await tabBarController.selectTab(index: targetIndex, query: query) else {
+                return false
+            }
+
+            updateRootTabRecord(currentRecord)
+
+            if !wasPreviousTabVisible || previousRecord?.webViewId != currentRecord.webViewId {
+                pageLifecycle?.onShow(webviewId: currentRecord.webViewId)
+            }
+
+            tabBarContainerController = tabBarController
+            return true
+        }
+
+        pageRecords.reversed().forEach { pageLifecycle?.onUnload(webviewId: $0.webViewId) }
+        pageRecords.removeAll()
+
+        let tabBarController = DMPTabBarContainerController(
+            initialPath: path,
+            query: query,
+            appConfig: app!.getAppConfig()!,
+            app: app,
+            navigator: self,
+            tabBarConfig: tabBarConfig,
+            showsLaunchLoading: false
+        )
+
+        guard let pageRecord = await tabBarController.prepareInitialTab() else {
+            return false
+        }
+
+        updateRootTabRecord(pageRecord)
+        tabBarContainerController = tabBarController
+
+        var nextViewControllers = navigationController.viewControllers.prefix {
+            !($0 is DMPPageController) && !($0 is DMPTabBarContainerController)
+        }
+        nextViewControllers.append(tabBarController)
+        navigationController.setViewControllers(Array(nextViewControllers), animated: animated)
+
+        pageLifecycle?.onShow(webviewId: pageRecord.webViewId)
+        return true
     }
 
     // MARK: - SwitchTab

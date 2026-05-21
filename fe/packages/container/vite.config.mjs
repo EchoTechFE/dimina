@@ -3,6 +3,13 @@ import process from 'node:process'
 import { defineConfig } from 'vite'
 import htmlMinifier from 'vite-plugin-html-minifier'
 
+function isVConsoleEvalWarning(warning) {
+	const message = warning?.message || ''
+	const id = warning?.id || warning?.loc?.file || ''
+
+	return warning?.code === 'EVAL' && (message.includes('vconsole') || id.includes('vconsole'))
+}
+
 export default defineConfig(({ mode }) => {
 	return {
 		base: process.env.GITHUB_ACTIONS ? '/dimina/' : '/',
@@ -31,23 +38,17 @@ export default defineConfig(({ mode }) => {
 		},
 		build: {
 			modulePreload: false,
-			minify: mode === 'production' ? 'terser' : false,
-			terserOptions: {
-				compress: {
-					drop_console: true,
-					drop_debugger: true,
-					keep_fargs: false,
-					reduce_vars: true,
-					booleans: true,
-				},
-				format: {
-					comments: false,
-				},
-			},
+			minify: mode === 'production',
 			rollupOptions: {
 				input: {
 					index: resolve(__dirname, 'index.html'),
 					pageFrame: resolve(__dirname, 'pageFrame.html'),
+				},
+				onwarn(warning, warn) {
+					if (isVConsoleEvalWarning(warning)) {
+						return
+					}
+					warn(warning)
 				},
 				output: {
 					// 设置入口文件（通常为主JavaScript文件）的命名规则

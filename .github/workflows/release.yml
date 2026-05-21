@@ -4,9 +4,21 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v1.2.0)'
+        required: true
+        type: string
+      skip_changelog:
+        description: 'Skip changelog generation'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  release:
+  changelog:
+    if: github.event_name == 'push' || !inputs.skip_changelog
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,6 +31,47 @@ jobs:
         with:
           node-version: lts/*
 
-      - run: npx changelogithub
+      - name: Generate Changelog
+        run: npx changelogithub
         env:
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+  swift-package:
+    if: always()
+    runs-on: macos-26
+    needs: changelog
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Swift and Xcode versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=${GITHUB_REF#refs/tags/}
+          fi
+          # Remove 'v' prefix if present
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Tag: $TAG, Extracted version: $VERSION"
+
+      - name: Verify Swift package manifest
+        run: |
+          swift package dump-package > /tmp/package.json
+          grep '"name" : "Dimina"' /tmp/package.json
+          echo "Swift package manifest is valid for tag v${{ steps.version.outputs.version }}"
+
+      - name: Resolve Swift package dependencies
+        run: swift package resolve
+
+      - name: Resolve Xcode package dependencies
+        run: xcodebuild -resolvePackageDependencies -project iOS/dimina.xcodeproj -scheme dimina
+
+      - name: Build iOS example
+        run: xcodebuild -project iOS/dimina.xcodeproj -scheme dimina -destination 'generic/platform=iOS Simulator' build

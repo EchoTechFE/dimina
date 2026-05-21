@@ -52,30 +52,33 @@ public class DMPWebViewInvoke {
                     
                     // 处理消息并获取返回值
                     let result = self.processInvokeMessage(type: type, body: body, target: target)
-                    
+
                     // 将结果返回给JS
                     if let callbackId = callbackId {
                         var resultJson = "null"
-                        
+
                         // 根据返回值类型生成适当的JS表示
-                        if let resultStr = result as? String {
-                            // 字符串类型，需要加引号
-                            resultJson = "\"\(resultStr)\""
-                        } else if let resultNum = result as? NSNumber {
-                            // 数字或布尔值
-                            if CFGetTypeID(resultNum) == CFBooleanGetTypeID() {
-                                // 布尔值
-                                resultJson = resultNum.boolValue ? "true" : "false"
-                            } else {
-                                // 数字
-                                resultJson = resultNum.stringValue
+                        if let syncResult = result as? DMPSyncResult, let value = syncResult.value {
+                            // DMPAPIResult sync result - convert value to JSON
+                            if let resultStr = value as? String,
+                               let strData = try? JSONSerialization.data(withJSONObject: [resultStr]),
+                               let escaped = String(data: strData, encoding: .utf8) {
+                                // JSON-encode via array wrapper to escape quotes/backslashes/newlines
+                                resultJson = String(escaped.dropFirst().dropLast())
+                            } else if let resultNum = value as? NSNumber {
+                                if CFGetTypeID(resultNum) == CFBooleanGetTypeID() {
+                                    resultJson = resultNum.boolValue ? "true" : "false"
+                                } else {
+                                    resultJson = resultNum.stringValue
+                                }
+                            } else if let resultDict = value as? [String: Any] {
+                                resultJson = DMPUtil.jsonEncode(from: resultDict) ?? "null"
+                            } else if let resultArray = value as? [Any] {
+                                resultJson = DMPUtil.jsonEncode(from: resultArray) ?? "null"
                             }
                         } else if let resultDict = result as? [String: Any] {
-                            // 对象
+                            // Legacy dict result from non-bridge paths
                             resultJson = DMPUtil.jsonEncode(from: resultDict) ?? "null"
-                        } else if let resultArray = result as? [Any] {
-                            // 数组
-                            resultJson = DMPUtil.jsonEncode(from: resultArray) ?? "null"
                         }
                         
                         let callbackScript = """
@@ -94,31 +97,38 @@ public class DMPWebViewInvoke {
     
     // 注入invoke相关的JavaScript代码
     public func injectInvokeJavaScript(webview: DMPWebview) {
-        let invokeScript = """
-        // 添加invoke方法
-        window.DiminaRenderBridge = window.DiminaRenderBridge || {};
-        window.DiminaRenderBridge.invoke = function(msg) {            
-            if (typeof msg !== 'string') {
-                console.error('DiminaRenderBridge.invoke: 消息必须是字符串类型', msg);
-                return null;
-            }
-            
-            return new Promise((resolve) => {
-                const callbackId = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
-                
-                // 设置一次性回调函数
-                window[callbackId] = function(result) {
-                    resolve(result);
-                    delete window[callbackId];
-                };
-                
-                // 直接发送字符串消息到Native
-                window.webkit.messageHandlers.invokeHandler.postMessage(msg);
-            });
-        };
-        """
-        
-        webview.executeJavaScript(invokeScript)
+        let invokeScript = WKUserScript(source: """
+        (function() {
+            window.DiminaRenderBridge = window.DiminaRenderBridge || {};
+            window.DiminaRenderBridge.invoke = function(msg) {
+                if (typeof msg !== 'string') {
+                    console.error('DiminaRenderBridge.invoke: 消息必须是字符串类型', msg);
+                    return Promise.resolve(null);
+                }
+
+                return new Promise(function(resolve) {
+                    if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.invokeHandler) {
+                        console.error('DiminaRenderBridge.invoke: native handler not ready');
+                        resolve(null);
+                        return;
+                    }
+
+                    var callbackId = 'cb_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+
+                    // 设置一次性回调函数
+                    window[callbackId] = function(result) {
+                        resolve(result);
+                        delete window[callbackId];
+                    };
+
+                    // 直接发送字符串消息到Native
+                    window.webkit.messageHandlers.invokeHandler.postMessage(msg);
+                });
+            };
+        })();
+        """, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+
+        webview.getWebView().configuration.userContentController.addUserScript(invokeScript)
     }
     
     public func processInvokeMessage(type: String, body: [String: Any], target: String) -> Any {

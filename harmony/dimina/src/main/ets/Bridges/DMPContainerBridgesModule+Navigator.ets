@@ -84,24 +84,39 @@ export class DMPContainerBridgesModuleNavigator extends DMPContainerBridgesModul
   navigateTo(data: DMPMap, callback: DMPBridgeCallback) {
     DMPLogger.d("navigateTo", data.toStr())
     const navigator = this.app.navigatorManager.getCurNavigator()
-    if (navigator) {
-      let url: string = data.get('url')
-      let routerParam = DataTransformer.parse(url)
-      navigator.navigateTo(routerParam)
+    if (!navigator) {
+      this.invokeFailureCallback(callback, null, 'navigateTo:fail no current navigator')
+      return
     }
-    this.invokeSuccessCallback(callback, null);
+    let url: string = data.get('url')
+    let routerParam = DataTransformer.parse(url)
+    navigator.navigateTo(routerParam)
+      .then(() => {
+        this.invokeSuccessCallback(callback, null)
+      })
+      .catch((err: Error) => {
+        // 来源：DMPNavigator.navigateTo —— 例如目标是 tabBar 页面被拦截
+        this.invokeFailureCallback(callback, null, err?.message ?? 'navigateTo:fail')
+      })
   }
 
   redirectTo(data: DMPMap, callback: DMPBridgeCallback) {
     DMPLogger.d("redirectTo", data.toStr())
     const navigator = this.app.navigatorManager.getCurNavigator()
-    if (navigator) {
-      let url: string = data.get('url')
-      let routerParam = DataTransformer.parse(url)
-      navigator.redirectTo(routerParam)
+    if (!navigator) {
+      this.invokeFailureCallback(callback, null, 'redirectTo:fail no current navigator')
+      return
     }
-
-    this.invokeSuccessCallback(callback, null);
+    let url: string = data.get('url')
+    let routerParam = DataTransformer.parse(url)
+    navigator.redirectTo(routerParam)
+      .then(() => {
+        this.invokeSuccessCallback(callback, null)
+      })
+      .catch((err: Error) => {
+        // 来源：DMPNavigator.redirectTo —— 例如目标是 tabBar 页面被拦截
+        this.invokeFailureCallback(callback, null, err?.message ?? 'redirectTo:fail')
+      })
   }
 
   navigateBack(data: DMPMap, callback: DMPBridgeCallback) {
@@ -116,17 +131,26 @@ export class DMPContainerBridgesModuleNavigator extends DMPContainerBridgesModul
   switchTab(data: DMPMap, callback: DMPBridgeCallback) {
     DMPLogger.d("switchTab", data.toStr())
     const navigator = this.app.navigatorManager.getCurNavigator()
-    if (navigator) {
-      let url: string = data.get('url')
-      let routerParam = DataTransformer.parse(url)
-      navigator.switchTab(routerParam)
+    if (!navigator) {
+      this.invokeFailureCallback(callback, null, 'switchTab:fail no current navigator')
+      return
     }
-    this.invokeSuccessCallback(callback, null);
+    let url: string = data.get('url')
+    let routerParam = DataTransformer.parse(url)
+    navigator.switchTab(routerParam)
+      .then(() => {
+        this.invokeSuccessCallback(callback, null)
+      })
+      .catch((err: Error) => {
+        // 错误信息源自 DMPNavigator.switchTab：目标不在 tabBar.list / 栈空 / event emit 失败
+        this.invokeFailureCallback(callback, null, err?.message ?? 'switchTab:fail')
+      })
   }
 
   applyUpdate(data: DMPMap, callback: DMPBridgeCallback) {
     const app: DMPApp = this.app!
     app.updateApp()
+    this.invokeSuccessCallback(callback, null)
   }
 
   private async exeJsLogicScript(packageName: string) {
@@ -137,4 +161,7 @@ export class DMPContainerBridgesModuleNavigator extends DMPContainerBridgesModul
     }
   }
 }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 644dd9ef38e1e5b18a2eb792eed5416f1b9c3057

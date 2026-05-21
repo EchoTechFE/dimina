@@ -15,6 +15,7 @@ import window from '@ohos.window'
 import { ImageKnife } from '@ohos/imageknifepro'
 import { DMPWebViewController } from '../HybridContainer/DMPWebViewController'
 import { DMPAppModuleManager } from '../Bridges/DMPAppModuleManager'
+import { DMPExtModuleHandler } from '../Bridges/DMPExtModuleHandler'
 import { DMPWindowUtil } from '../Utils/DMPWindowUtils'
 import { DMPEntryContext } from './config/DMPEntryContext'
 import { DMPChannelProxyNext } from '../Service/DMPChannelProxyNext'
@@ -29,16 +30,22 @@ import { DMPNavigatorManager } from '../Navigator/DMPNavigatorManager'
 import { DRouter } from '../Navigator/DRouter'
 import { DMPAppLifecycle } from './DMPAppLifecycle'
 import { DMPDeviceUtil } from '../Utils/DMPDeviceUtils'
-
+import { DMPRemoteUpdateManager } from '../Bundle/DMPRemoteUpdateManager'
 export type DMPBundleUpdateCallback = () => void;
+
+export interface DMPAppInitOptions {
+  apiNamespaces?: string[];
+}
+
 //小程序应用实例
 export class DMPApp {
   appIndex: number;
   appConfig: DMPAppConfig
   customConfig: DMPCustomConfig = new DMPCustomConfig();
-  private onUpdateResult?: DMPBundleUpdateCallback
+  private onUpdateResults: DMPBundleUpdateCallback[] = []
   private _container: DMPContainer = new DMPContainer(this)
   private static _context: common.UIAbilityContext
+  private static _apiNamespaces: string[] = []
   private _containerBridges: DMPBridges = new DMPBridges()
   private static _entryContext: DMPEntryContext
   private _appModuleManager: DMPAppModuleManager = new DMPAppModuleManager(this)
@@ -115,20 +122,24 @@ export class DMPApp {
   }
 
   public get currentWebViewId(): number {
-    return this.navigatorManager!.getTopPageRecord()?.webViewId ?? -1
+    // 走 getActivePageRecord：tab 模式下返回真实选中 tab，
+    // 否则返回栈顶（含 navigateTo 推入的页面 / 非 tab 场景）
+    return this.navigatorManager!.getActivePageRecord()?.webViewId ?? -1
   }
 
   public static getWindowStage(): window.WindowStage {
     return DMPApp._entryContext.getWindowStage();
   }
 
-  static init(context: DMPEntryContext) {
+  static init(context: DMPEntryContext, options?: DMPAppInitOptions) {
     DMPApp._entryContext = context;
     DMPApp._context = DMPApp._entryContext.getContext();
-    // 初始化 ImageKnife 文件缓存（异步执行，不阻塞初始化流程）
-    ImageKnife.getInstance().initFileCache(DMPApp._entryContext.getContext()).catch((err: Error) => {
-      console.error('ImageKnife initFileCache failed:', err);
-    });
+    DMPApp._apiNamespaces = options?.apiNamespaces ?? [];
+    ImageKnife.getInstance()
+      .initFileCache(DMPApp._entryContext.getContext())
+      .catch((error: Error) => {
+        DMPLogger.e(Tags.LAUNCH, `ImageKnifePro initFileCache failed: ${error.message}`)
+      })
     context.getWindowStage().on('windowStageEvent', DMPAppLifecycle.onWindowStageEvent);
     DMPDeviceUtil.prepareSafeAreaAndDisplayWH(DMPApp._entryContext.getContext())
   }
@@ -229,23 +240,14 @@ export class DMPApp {
       installConfig.launchAppType = this.appConfig.launchAppType;
 
       let waitLaunchBundleReady = async (config: DMPBundleLoadInfo) => {
-        try {
-          DMPLogger.i(Tags.LAUNCH, "launchBundleReady: launchType: " + DMPLaunchType[installConfig.launchAppType]);
-          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤1: 加载配置文件");
-          await this._bundleManager.loadConfigFile()
-          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤2: 更新 Worker 数据");
-          this._service.updateWorkerAppData();
-          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤3: 启动引擎服务");
-          await this.startEngineService()
-          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤4: 启动主服务");
-          await this.startMainService()
-          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 步骤5: 设置状态为 RUN");
-          this._engineStatus.setStatus(EngineStatus.RUN)
-          DMPLogger.i(Tags.LAUNCH, "[waitLaunchBundleReady] 完成");
-        } catch (e) {
-          DMPLogger.e(Tags.LAUNCH, `[waitLaunchBundleReady] 启动失败: ${e}`);
-          throw new Error(String(e));
-        }
+        DMPLogger.i(Tags.LAUNCH, "launchBundleReady: launchType: " + DMPLaunchType[installConfig.launchAppType]);
+        await this._bundleManager.loadConfigFile()
+        this._service.updateWorkerAppData();
+        await this.startEngineService()
+        await this.startMainService()
+        this.startRemoteUpdateCheck()
+
+        this._engineStatus.setStatus(EngineStatus.RUN)
       };
 
       const loadComplete = (config: DMPBundleLoadInfo) => {
@@ -301,7 +303,19 @@ export class DMPApp {
     DMPChannelProxyNext.ContainerToService(msg, this.appIndex)
   }
 
+  /**
+   * 注册宿主第三方扩展模块，使小程序可通过 wx.extBridge / wx.extOnBridge / wx.extOffBridge 调用。
+   *
+   * @param moduleName  宿主模块名，须与 JS 侧传入的 module 参数一致
+   * @param handler     模块处理函数，参见 DMPExtModuleHandler
+   */
+  registerExtModule(moduleName: string, handler: DMPExtModuleHandler): void {
+    this._appModuleManager.registerExtModule(moduleName, handler);
+  }
+
   destroyEngine() {
+    // 销毁前取消所有 extOnBridge 订阅，防止内存泄漏
+    this._appModuleManager.getExtBridgeModule()?.cancelAllSubscriptions();
     this._service.destroy()
     this.engineStatus.setStatus(EngineStatus.STOP)
   }
@@ -311,10 +325,8 @@ export class DMPApp {
   }
 
   invokeUpdateResult() {
-    if (this.onUpdateResult) {
-      this.onUpdateResult()
-      this.onUpdateResult = undefined
-    }
+    const callbacks = this.onUpdateResults.splice(0)
+    callbacks.forEach((callback) => callback())
   }
 
   onUpdateManagerCall(method: string, arg: DMPMap) {
@@ -327,10 +339,29 @@ export class DMPApp {
     if (this._container.isResourceLoaded(this.currentWebViewId)) {
       DMPChannelProxyNext.ContainerToService(msg, this.appIndex)
     } else {
-      this.onUpdateResult = () => {
+      this.onUpdateResults.push(() => {
         DMPChannelProxyNext.ContainerToService(msg, this.appIndex)
-      }
+      })
     }
+  }
+
+  private startRemoteUpdateCheck() {
+    DMPRemoteUpdateManager.sharedInstance()
+      .checkForUpdate(this)
+      .catch((error: Error) => {
+        DMPLogger.e(Tags.LOAD_REMOTE_BUNDLE, `远程更新检查失败: ${error.message}`)
+        this.notifyUpdateManagerStatus('noupdate')
+      })
+  }
+
+  public notifyUpdateManagerStatus(event: string) {
+    const msg: DMPMap = new DMPMap({
+      type: 'onUpdateStatusChange',
+      body: {
+        event,
+      }
+    })
+    this._service.postMessage(msg)
   }
 
   public getWindowBottomSafeArea(): number {
@@ -367,6 +398,12 @@ export class DMPApp {
 
   private async startEngineService() {
     DMPLogger.d(Tags.LAUNCH, "startEngineService start");
+    // Inject custom API namespaces before loading service.js
+    const namespaces = DMPApp._apiNamespaces
+    if (namespaces.length > 0) {
+      const json = namespaces.map((n: string) => `"${n}"`).join(",")
+      this._service.executeScript(`globalThis.__diminaApiNamespaces = [${json}]`)
+    }
     const serviceJsPath = await this._bundleManager.requestServiceJsUri();
     await this._service.loadFileUri(serviceJsPath);
     DMPLogger.i(Tags.LAUNCH, "startEngineService end");

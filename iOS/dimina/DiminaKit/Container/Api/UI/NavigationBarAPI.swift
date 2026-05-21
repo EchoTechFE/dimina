@@ -24,7 +24,7 @@ public class NavigationBarAPI: DMPContainerApi {
         guard let title = param.get("title") as? String else {
             let errorMsg = "\(SET_NAVIGATION_BAR_TITLE):fail missing parameter title"
             DMPContainerApi.invokeFailure(callback: callback, param: nil, errMsg: errorMsg)
-            return nil
+            return DMPAsyncResult()
         }
         
         
@@ -33,18 +33,25 @@ public class NavigationBarAPI: DMPContainerApi {
         guard let navigationController = app?.getNavigator()?.navigationController else {
             let errorMsg = "\(SET_NAVIGATION_BAR_TITLE):fail navigation controller not found"
             DMPContainerApi.invokeFailure(callback: callback, param: nil, errMsg: errorMsg)
-            return nil
+            return DMPAsyncResult()
         }
         
         DispatchQueue.main.async {
-            navigationController.topViewController?.title = title
+            if let pageController = navigationController.topViewController as? DMPPageController {
+                pageController.updateNavigationTitle(title)
+            } else if let tabBarController = navigationController.topViewController as? DMPTabBarContainerController,
+                      let pageController = tabBarController.currentPageController {
+                pageController.updateNavigationTitle(title)
+            } else {
+                navigationController.topViewController?.title = title
+            }
             
             let result = DMPMap()
             result.set("errMsg", "\(SET_NAVIGATION_BAR_TITLE):ok")
             DMPContainerApi.invokeSuccess(callback: callback, param: result)
         }
         
-        return nil
+        return DMPAsyncResult()
     }
     
     // Set navigation bar color
@@ -55,13 +62,13 @@ public class NavigationBarAPI: DMPContainerApi {
               let backgroundColor = param.get("backgroundColor") as? String else {
             let errorMsg = "\(SET_NAVIGATION_BAR_COLOR):fail missing required parameters"
             DMPContainerApi.invokeFailure(callback: callback, param: nil, errMsg: errorMsg)
-            return nil
+            return DMPAsyncResult()
         }
         
         guard frontColor == "#ffffff" || frontColor == "#000000" else {
             let errorMsg = "\(SET_NAVIGATION_BAR_COLOR):fail frontColor only supports #ffffff or #000000"
             DMPContainerApi.invokeFailure(callback: callback, param: nil, errMsg: errorMsg)
-            return nil
+            return DMPAsyncResult()
         }
         
         let animation = param.getDMPMap(key: "animation")
@@ -102,19 +109,34 @@ public class NavigationBarAPI: DMPContainerApi {
             }()
             
             UIView.animate(withDuration: animationDuration, delay: 0, options: animationOptions) {
-                // 设置特定于当前控制器的导航栏样式
-                topViewController.navigationItem.standardAppearance = appearance
-                topViewController.navigationItem.scrollEdgeAppearance = appearance
-                topViewController.navigationItem.compactAppearance = appearance
-                topViewController.navigationItem.leftBarButtonItem = app?.getNavigator()?.createBackButton(darkStyle: frontColor == "#ffffff")
-                
-                if #available(iOS 15.0, *) {
-                    topViewController.navigationItem.compactScrollEdgeAppearance = appearance
+                if let pageController = topViewController as? DMPPageController {
+                    pageController.updateNavigationColor(
+                        backgroundColor: bgColor,
+                        textColor: textColor,
+                        darkStyle: frontColor == "#ffffff"
+                    )
+                } else if let tabBarController = topViewController as? DMPTabBarContainerController,
+                          let pageController = tabBarController.currentPageController {
+                    pageController.updateNavigationColor(
+                        backgroundColor: bgColor,
+                        textColor: textColor,
+                        darkStyle: frontColor == "#ffffff"
+                    )
+                } else {
+                    // 设置特定于当前控制器的导航栏样式
+                    topViewController.navigationItem.standardAppearance = appearance
+                    topViewController.navigationItem.scrollEdgeAppearance = appearance
+                    topViewController.navigationItem.compactAppearance = appearance
+                    topViewController.navigationItem.leftBarButtonItem = app?.getNavigator()?.createBackButton(darkStyle: frontColor == "#ffffff")
+
+                    if #available(iOS 15.0, *) {
+                        topViewController.navigationItem.compactScrollEdgeAppearance = appearance
+                    }
+
+                    // 设置导航栏按钮颜色
+                    navigationController.navigationBar.tintColor = textColor
+                    navigationController.navigationBar.setNeedsLayout()
                 }
-                
-                // 设置导航栏按钮颜色
-                navigationController.navigationBar.tintColor = textColor
-                navigationController.navigationBar.setNeedsLayout()
             }
             
             // 保存样式到页面记录，以便页面恢复时使用
@@ -133,6 +155,6 @@ public class NavigationBarAPI: DMPContainerApi {
             DMPContainerApi.invokeSuccess(callback: callback, param: result)
         }
         
-        return nil
+        return DMPAsyncResult()
     }
 }

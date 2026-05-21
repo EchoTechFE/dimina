@@ -35,6 +35,10 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     this.app = app;
   }
 
+  private isDebugMode(): boolean {
+    return this.app.appConfig.isDebugMode || DMPContextUtils.debugMode;
+  }
+
   async install(installConfig: DMPBundleInstallConfig, launchBundleReady: (config: DMPBundleLoadInfo) => void,
     loadComplete?: (config: DMPBundleLoadInfo) => void,
     loadError?: (code: number, errMsg: string) => void): Promise<DMPBundleLoadInfo> {
@@ -100,13 +104,13 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
   //加载底包
   async loadLocalPackage(bundleLoadInfo: DMPBundleLoadInfo) {
     try {
-      if(this.appOnline){
-        let localJSSdkConfigJson =
-          DMPRawFileUtils.loadFile(DMPContextUtils.getUIAbilityContext(), 'jssdk/config.json');
-        if (DMPStringUtils.isNotEmpty(localJSSdkConfigJson)) {
-          bundleLoadInfo.localJSSdkBundleConfig =
-            DMPJSSdkBundleConfig.fromJson(DMPMap.createFromString(localJSSdkConfigJson));
-        }
+      if (bundleLoadInfo.isAppUpdate() || this.isDebugMode()) {
+        DMPLogger.i(Tags.LOAD_LOCAL_BUNDLE, '应用有更新或处于调试模式');
+        //加载本地配置
+        this.loadLocalBundleConfig(bundleLoadInfo);
+        //安装jsApp本地包
+        await this.installLocalJsAppBundle(bundleLoadInfo);
+        //安装jsSdk本地包
         await this.installLocalJSSDKBundle(bundleLoadInfo);
         DMPLogger.i(Tags.BUNDLE, "加载缓存包")
         this.loadCacheConfig(bundleLoadInfo);
@@ -183,7 +187,8 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     if (bundleLoadInfo.localJSSdkBundleConfig != null) {
       let cacheJSSdkConfig = this.fileManager.loadJSSdkConfig();
       bundleLoadInfo.cacheJSSdkBundleConfig = DMPJSSdkBundleConfig.fromJson(cacheJSSdkConfig);
-      if (bundleLoadInfo.cacheJSSdkBundleConfig == null
+      if (this.isDebugMode()
+        || bundleLoadInfo.cacheJSSdkBundleConfig == null
         || bundleLoadInfo.localJSSdkBundleConfig.versionCode > bundleLoadInfo.cacheJSSdkBundleConfig.versionCode) {
         await this.fileManager.copyJSSDKAndUnZip(`${bundleLoadInfo.localJSSdkBundleConfig.versionCode}`);
         DMPLogger.i(Tags.BUNDLE, '复制jsSdk完成');
@@ -198,7 +203,8 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     if (bundleLoadInfo.localJSAppBundleConfig != null) {
       let cacheJSAppConfig = this.fileManager.loadJSAppConfig(bundleLoadInfo.appId);
       bundleLoadInfo.cacheJSAppBundleConfig = DMJSAppBundleConfig.fromJson(cacheJSAppConfig);
-      if (bundleLoadInfo.cacheJSAppBundleConfig == null
+      if (this.isDebugMode()
+        || bundleLoadInfo.cacheJSAppBundleConfig == null
         || bundleLoadInfo.localJSAppBundleConfig.versionCode > bundleLoadInfo.cacheJSAppBundleConfig.versionCode) {
         await this.fileManager.copyJSAppAndUnZip(this.installConfig!.appId,
           `${bundleLoadInfo.localJSAppBundleConfig.versionCode}`);
@@ -353,3 +359,7 @@ export class DMPReleaseBundleLoader implements DMPBundleLoader {
     this.waitLoadError(errCode, errMsg);
   }
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 644dd9ef38e1e5b18a2eb792eed5416f1b9c3057
