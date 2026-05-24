@@ -7,6 +7,7 @@ import { Tags } from '../EventTrack/Tags';
 import { DMPApp } from '../DApp/DMPApp';
 import { DMPModuleManager } from './DMPModuleManager';
 import { DMPContainerBridgesModuleExt } from './DMPContainerBridgesModule+Ext';
+import promptAction from '@ohos.promptAction';
 
 export class DMPBridges {
   static callWebViewMethods(methodName: string, webViewId: number,
@@ -157,6 +158,15 @@ export class DMPBridges {
       }
     } else {
       DMPLogger.e(Tags.BRIDGE, `Bridge not implemented  ${methodName}, ${moduleName}`);
+      console.error(`[dimina] Bridge not implemented: ${methodName}`);
+      try {
+        promptAction.showToast({
+          message: `Bridge 未实现: ${methodName}`,
+          duration: 2000
+        });
+      } catch (e) {
+        DMPLogger.e(Tags.BRIDGE, `showToast error: ${e}`);
+      }
     }
     return result;
   }

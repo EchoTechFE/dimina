@@ -161,7 +161,3 @@ export class DMPContainerBridgesModuleNavigator extends DMPContainerBridgesModul
     }
   }
 }
-<<<<<<< HEAD
-
-=======
->>>>>>> 644dd9ef38e1e5b18a2eb792eed5416f1b9c3057

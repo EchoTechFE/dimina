@@ -14,20 +14,44 @@ export struct DMPTabBarItemView {
 
   build() {
     Column({ space: 2 }) {
-      // Icon
-      if (this.isSelected && this.item.selectedIconPath) {
-        Image(this.item.selectedIconPath)
-          .width(24)
-          .height(24)
-          .objectFit(ImageFit.Contain)
-      } else if (!this.isSelected && this.item.iconPath) {
-        Image(this.item.iconPath)
-          .width(24)
-          .height(24)
-          .objectFit(ImageFit.Contain)
-      } else {
-        // No icon: reserve 24vp space for consistent layout
-        Row().width(24).height(24)
+      // Icon + badge/redDot
+      Stack({ alignContent: Alignment.TopEnd }) {
+        // Icon
+        if (this.isSelected && this.item.selectedIconPath) {
+          Image(this.item.selectedIconPath)
+            .width(24)
+            .height(24)
+            .objectFit(ImageFit.Contain)
+        } else if (!this.isSelected && this.item.iconPath) {
+          Image(this.item.iconPath)
+            .width(24)
+            .height(24)
+            .objectFit(ImageFit.Contain)
+        } else {
+          // No icon: reserve 24vp space for consistent layout
+          Row().width(24).height(24)
+        }
+
+        // Badge text
+        if (this.item.badge) {
+          Text(this.item.badge)
+            .fontSize(10)
+            .fontColor('#FFFFFF')
+            .backgroundColor('#FA5151')
+            .borderRadius(8)
+            .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+            .constraintSize({ minWidth: 16 })
+            .textAlign(TextAlign.Center)
+            .offset({ x: 8, y: -4 })
+        } else if (this.item.showRedDot) {
+          // Red dot
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor('#FA5151')
+            .offset({ x: 4, y: -2 })
+        }
       }
 
       // Text
@@ -50,6 +74,7 @@ export struct DMPTabBarItemView {
 @Component
 export struct DMPTabBar {
   @Link selectedIndex: number;
+  @Prop tabBarStyleVersion: number = 0;
   private tabBarConfig: DMPTabBarConfig | undefined = undefined;
   private onTabSelected?: (index: number) => void;
 
@@ -93,7 +118,7 @@ export struct DMPTabBar {
                 this.onTabSelected(index)
               }
             })
-          }, (item: DMPTabBarItem, index: number) => `${index}_${item.pagePath}`)
+          }, (item: DMPTabBarItem, index: number) => `${index}_${item.pagePath}_${this.tabBarStyleVersion}`)
         }
         .width('100%')
         .height(98)
