@@ -6,6 +6,8 @@ export interface DMPTabBarItem {
   text: string;
   iconPath?: string;
   selectedIconPath?: string;
+  badge?: string;
+  showRedDot?: boolean;
 }
 
 // TabBar configuration

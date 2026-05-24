@@ -120,12 +120,11 @@ export class RequestCallback {
     const bundleManager = app!.bundleManager;
     const bundleInfo = bundleManager.getBundleInfo();
     const appId = bundleInfo.appId;
-    const path = RequestCallback.getUrlPath(url);
-    if (path.startsWith('http://127.0.0.1/')) {
-      const isFromAppBundle = path.includes(appId);
+    if (url.startsWith('https://mpservice.qiandao.com/')) {
+      const isFromAppBundle = url.includes(appId);
       const processUrl = isFromAppBundle
-        ? path.replace(`http://127.0.0.1/${appId}/`, '')
-        : path.replace('http://127.0.0.1/', '');
+        ? url.replace(`https://mpservice.qiandao.com/${appId}/`, '')
+        : url.replace('https://mpservice.qiandao.com/', '');
       const sandboxDir = isFromAppBundle
         ? bundleManager.getCurrentJSAppDir()
         : bundleManager.getCurrentJSSdkDir();

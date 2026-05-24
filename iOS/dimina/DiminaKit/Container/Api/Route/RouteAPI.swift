@@ -113,6 +113,32 @@ public class RouteAPI: DMPContainerApi {
         return DMPAsyncResult()
     }
 
+    // Switch to a tabBar page, closing all non-tabBar pages
+    @BridgeMethod(SWITCH_TAB)
+    var switchTab: DMPBridgeMethodHandler = { param, env, callback in
+        let param = param.getMap()
+        guard let url = param.get("url") as? String, !url.isEmpty else {
+            let errorMap = DMPMap()
+            errorMap.set("errMsg", "\(RouteAPI.SWITCH_TAB):fail URL cannot be empty")
+            DMPContainerApi.invokeFailure(callback: callback, param: errorMap, errMsg: "URL cannot be empty")
+            return
+        }
+
+        let app = DMPAppManager.sharedInstance().getApp(appIndex: env.appIndex)
+
+        let urlData = DMPUtil.queryPath(path: url)
+        let pagePath = urlData["pagePath"] as! String
+
+        Task { @MainActor in
+            await app?.getNavigator()?.switchTab(to: pagePath)
+        }
+
+        let result = DMPMap()
+        result.set("errMsg", "\(RouteAPI.SWITCH_TAB):ok")
+        DMPContainerApi.invokeSuccess(callback: callback, param: result)
+        return nil
+    }
+
     // Close all pages and open a specific page
     @BridgeMethod(RE_LAUNCH)
     var relaunch: DMPBridgeMethodHandler = { param, env, callback in

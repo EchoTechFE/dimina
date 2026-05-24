@@ -2,6 +2,8 @@ import { DMPBridges } from '../Bridges/DMPBridges';
 import { DMPApp } from '../DApp/DMPApp';
 import { DMPChannelProxyNext } from '../Service/DMPChannelProxyNext';
 import { DMPMap } from '../Utils/DMPMap';
+import { DMPLogger } from '../EventTrack/DMPLogger';
+import { Tags } from '../EventTrack/Tags';
 
 export enum ResourceLoadType {
   Init = 0 << 0,
@@ -36,6 +38,8 @@ export class DMPContainer {
   public loadResourceService(webViewId: number, pagePath: string) {
     const root = this.app?.bundleManager.getJsAppModuleConfig()?.getRootPackage(pagePath)
 
+    DMPLogger.i(Tags.LAUNCH, `loadResourceService: webViewId=${webViewId}, pagePath=${pagePath}, root=${root}`)
+
     const msg: DMPMap = new DMPMap({
       type: 'loadResource',
       body: {
@@ -46,11 +50,15 @@ export class DMPContainer {
       }
     })
 
+    DMPLogger.d(Tags.LAUNCH, `ContainerToService: ${msg.toStr()}`)
     DMPChannelProxyNext.ContainerToService(msg, this.app.appIndex)
   }
 
   public loadResourceRender(webViewId: number, pagePath: string) {
     const root = this.app?.bundleManager.getJsAppModuleConfig()?.getRootPackage(pagePath)
+
+    DMPLogger.i(Tags.LAUNCH, `loadResourceRender: webViewId=${webViewId}, pagePath=${pagePath}, root=${root}`)
+
     const msg: DMPMap = new DMPMap({
       type: 'loadResource',
       body: {
@@ -61,6 +69,7 @@ export class DMPContainer {
       }
     })
 
+    DMPLogger.d(Tags.LAUNCH, `ContainerToRender: ${msg.toStr()}`)
     DMPChannelProxyNext.ContainerToRender(msg, this.app, webViewId)
   }
 

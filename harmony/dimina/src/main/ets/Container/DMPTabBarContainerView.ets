@@ -17,6 +17,8 @@ export struct DMPTabBarContainerView {
   private app: DMPApp | undefined = undefined
   private tabBarConfig: DMPTabBarConfig | undefined = undefined
   @State selectedIndex: number = 0
+  @State private tabBarStyleVersion: number = 0
+  @State private tabBarVisible: boolean = true
   // Use Map to track loaded tab pages (index -> DMPPageRecord)
   @State tabPageRecords: Map<number, DMPPageRecord> = new Map()
 
@@ -59,14 +61,16 @@ export struct DMPTabBarContainerView {
     if (!this.app) {
       return rawPath
     }
-    const appId = this.app.bundleManager.getBundleInfo().appId
     const jsAppDir = this.app.bundleManager.getCurrentJSAppDir()
-    const appIdPrefix = `/${appId}/`
-    if (rawPath.startsWith(appIdPrefix)) {
-      return this.toFileUri(`${jsAppDir}/${rawPath.substring(appIdPrefix.length)}`)
-    }
+    // 编译器输出路径形如 /<wxAppId>/main/static/xxx.png
+    // 运行时 dimina appId 与微信 appId 不同，所以按 /<任意前缀>/main/ 模式匹配：
+    // 提取第一段 /<prefix>/ 后的子路径，拼到 jsAppDir 下
     if (rawPath.startsWith('/')) {
-      return this.toFileUri(rawPath)
+      const secondSlash = rawPath.indexOf('/', 1)
+      if (secondSlash > 0) {
+        const subPath = rawPath.substring(secondSlash + 1)
+        return this.toFileUri(`${jsAppDir}/${subPath}`)
+      }
     }
     return this.toFileUri(`${jsAppDir}/main/${rawPath}`)
   }
@@ -80,6 +84,7 @@ export struct DMPTabBarContainerView {
       return
     }
     for (const item of this.tabBarConfig.list) {
+      DMPLogger.d(Tags.TABBAR, `[icon-resolve] before: iconPath=${item.iconPath}, selectedIconPath=${item.selectedIconPath}`)
       const resolvedIcon = this.resolveBundleAssetPath(item.iconPath)
       if (resolvedIcon !== item.iconPath) {
         item.iconPath = resolvedIcon
@@ -88,6 +93,7 @@ export struct DMPTabBarContainerView {
       if (resolvedSelected !== item.selectedIconPath) {
         item.selectedIconPath = resolvedSelected
       }
+      DMPLogger.d(Tags.TABBAR, `[icon-resolve] after: iconPath=${item.iconPath}, selectedIconPath=${item.selectedIconPath}`)
     }
     DMPLogger.d(Tags.TABBAR, `Resolved tabBar icon paths under ${this.app?.bundleManager?.getCurrentJSAppDir()}`)
   }
@@ -140,6 +146,18 @@ export struct DMPTabBarContainerView {
           DMPLogger.e(Tags.TABBAR, `Tab path not found in config: ${targetPath}`)
         }
       }
+    })
+
+    // Listen to setTabBarStyle / setTabBarItem / badge / redDot events
+    getContext(this).eventHub.on('tabbar_update_style', () => {
+      DMPLogger.d(Tags.TABBAR, 'Received tabbar_update_style event')
+      this.tabBarStyleVersion++
+    })
+
+    // Listen to showTabBar / hideTabBar events
+    getContext(this).eventHub.on('tabbar_set_visible', (visible: boolean) => {
+      DMPLogger.d(Tags.TABBAR, `Received tabbar_set_visible event: ${visible}`)
+      this.tabBarVisible = visible
     })
 
     DMPLogger.d(Tags.TABBAR, `TabBarContainer initialized. Initial tab loaded: ${this.selectedIndex}`)
@@ -273,10 +291,11 @@ export struct DMPTabBarContainerView {
       .width('100%')
 
       // TabBar at container level
-      if (this.tabBarConfig) {
+      if (this.tabBarConfig && this.tabBarVisible) {
         DMPTabBar({
           selectedIndex: this.selectedIndex,
           tabBarConfig: this.tabBarConfig,
+          tabBarStyleVersion: this.tabBarStyleVersion,
           onTabSelected: (index: number) => {
             this.handleTabSelected(index)
           }

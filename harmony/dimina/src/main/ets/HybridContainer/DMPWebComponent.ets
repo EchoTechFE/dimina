@@ -95,6 +95,15 @@ export struct DMPWebComponent {
             DMPLogger.d(`-onTitleReceive: ${event?.title}`)
           }
         })
+        .onErrorReceive((event) => {
+          DMPLogger.e(Tags.WEB_COMPONENT, `[WebView错误] webViewId=${this.webViewId}, URL: ${event.request.getRequestUrl()}, Error: ${event.error.getErrorInfo()}`)
+        })
+        .onHttpErrorReceive((event) => {
+          DMPLogger.e(Tags.WEB_COMPONENT, `[HTTP错误] webViewId=${this.webViewId}, URL: ${event.request.getRequestUrl()}, StatusCode: ${event.response.getResponseCode()}`)
+        })
+        .onResourceLoad((event) => {
+          DMPLogger.d(Tags.WEB_COMPONENT, `[资源加载] webViewId=${this.webViewId}, URL: ${event.url}`)
+        })
         .onPageVisible(() => {
           DMPLogger.d(Tags.DMP_WEB_COMPONENT, 'webViewId:' + this.webViewId + ' onPageVisible')
         })
