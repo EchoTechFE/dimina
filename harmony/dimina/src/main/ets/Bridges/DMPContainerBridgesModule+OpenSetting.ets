@@ -73,8 +73,8 @@ export class DMPContainerBridgesModuleOpenSetting extends DMPContainerBridgesMod
   authorize(data: DMPMap, callback: DMPBridgeCallback) {
     let context = DMPContextUtils.getUIAbilityContext()
     const scope = data.getString('scope') ?? '';
-    if (scope == 'scope.writePhotosAlbum') {
-      //弹出保存方式不需要权限申请
+    if (scope == 'scope.writePhotosAlbum' || scope == 'scope.userInfo') {
+      // scope.writePhotosAlbum 和 scope.userInfo 不需要系统权限申请，直接返回成功
       this.invokeSuccessCallback(callback, null)
       return
     }

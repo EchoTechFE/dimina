@@ -6,7 +6,7 @@ import { invokeAPI } from '@/api/common'
  * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.getLocation.html
  */
 export function getLocation(opts) {
-	invokeAPI('getLocation', opts)
+	return invokeAPI('getLocation', opts)
 }
 
 /**
@@ -14,7 +14,7 @@ export function getLocation(opts) {
  * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.startLocationUpdate.html
  */
 export function startLocationUpdate(opts) {
-	invokeAPI('startLocationUpdate', opts)
+	return invokeAPI('startLocationUpdate', opts)
 }
 
 /**
@@ -22,7 +22,7 @@ export function startLocationUpdate(opts) {
  * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.openLocation.html
  */
 export function openLocation(opts) {
-	invokeAPI('openLocation', opts)
+	return invokeAPI('openLocation', opts)
 }
 
 /**
@@ -30,7 +30,7 @@ export function openLocation(opts) {
  * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.stopLocationUpdate.html
  */
 export function stopLocationUpdate(opts) {
-	invokeAPI('stopLocationUpdate', opts)
+	return invokeAPI('stopLocationUpdate', opts)
 }
 
 /**
@@ -62,5 +62,42 @@ export function offLocationChange(listener) {
 	else {
 		invokeAPI('offLocationChange')
 		callback.remove()
+	}
+}
+
+/**
+ * 获取当前的模糊地理位置。
+ * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.getFuzzyLocation.html
+ */
+export function getFuzzyLocation(opts) {
+	return invokeAPI('getFuzzyLocation', opts)
+}
+
+/**
+ * 打开地图选择位置。
+ * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.chooseLocation.html
+ */
+export function chooseLocation(opts) {
+	return invokeAPI('chooseLocation', opts)
+}
+
+/**
+ * 打开POI列表选择位置。
+ * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.choosePoi.html
+ */
+export function choosePoi(opts) {
+	return invokeAPI('choosePoi', opts)
+}
+
+/**
+ * 监听持续定位接口返回失败时触发。
+ * https://developers.weixin.qq.com/miniprogram/dev/api/location/wx.onLocationChangeError.html
+ */
+export function onLocationChangeError(listener) {
+	if (listener) {
+		const id = callback.store(listener, true)
+		invokeAPI('onLocationChangeError', {
+			success: id,
+		})
 	}
 }
