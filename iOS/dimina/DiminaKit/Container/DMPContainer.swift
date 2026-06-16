@@ -24,6 +24,9 @@ public class DMPContainer {
     /// 宿主注册的第三方扩展模块，key = moduleName
     var extModules: [String: DMPExtModuleHandler] = [:]
 
+    /// 被标记为「仅渲染层可调」的扩展模块名集合（render-only 来源门）
+    var renderOnlyModules: Set<String> = []
+
     /// extOnBridge 持续订阅的取消函数，key = "${module}_${event}"
     private var extSubscriptions: [String: () -> Void] = [:]
 
@@ -35,14 +38,30 @@ public class DMPContainer {
     // MARK: - Ext Module Management
 
     /// 注册第三方扩展模块
-    func registerExtModule(_ moduleName: String, handler: @escaping DMPExtModuleHandler) {
+    /// - Parameter renderOnly: true 时该模块仅允许渲染层（`.render`）调用，
+    ///   逻辑层（`.service`，即小程序开发者代码所在 realm）调用将被拒绝。
+    func registerExtModule(_ moduleName: String, renderOnly: Bool = false, handler: @escaping DMPExtModuleHandler) {
         extModules[moduleName] = handler
+        if renderOnly {
+            renderOnlyModules.insert(moduleName)
+        } else {
+            renderOnlyModules.remove(moduleName)
+        }
     }
 
     /// 取消所有持续订阅（小程序销毁时调用）
     func clearExtSubscriptions() {
         extSubscriptions.values.forEach { $0() }
         extSubscriptions.removeAll()
+    }
+
+    /// render-only 来源门判定：模块被标记为仅渲染层可调，且来源不是 `.render` 时拦截。
+    /// 未标记的模块永远放行（行为不变）。
+    /// - Returns: true 表示应拒绝执行。
+    private func isRenderOnlyBlocked(module: String, source: DMPBridgeSource) -> Bool {
+        guard renderOnlyModules.contains(module) else { return false }
+        // 仅放行明确来自 render 的调用；其余（service / 未知）一律 fail-safe 拦截
+        return source != .render
     }
 
     // MARK: - Public Methods
@@ -103,7 +122,8 @@ public class DMPContainer {
     }
 
     public func callBridgeMethod(
-        methodName: String, webViewId: Int, param: DMPBridgeParam, app: DMPApp
+        methodName: String, webViewId: Int, param: DMPBridgeParam, app: DMPApp,
+        source: DMPBridgeSource = .service
     ) -> DMPAPIResult {
         let moduleName = "DMPContainerBridgesModule"
         print("Bridge call: module=\(moduleName), method=\(methodName)")
@@ -146,7 +166,8 @@ public class DMPContainer {
         let env = DMPBridgeEnv(
             appIndex: self.app?.getAppIndex() ?? 0,
             appId: self.app?.getAppId() ?? "",
-            webViewId: webViewId
+            webViewId: webViewId,
+            source: source
         )
 
         // 1. 精确命中已注册的标准 API
@@ -157,6 +178,16 @@ public class DMPContainer {
         // 2. extBridge：param 携带 "module" 字段
         let paramMap = param.getMap()
         if paramMap["module"] != nil {
+            // render-only 来源门：被标记的模块仅允许渲染层调用，
+            // 其余来源（service / 未知）一律 fail-safe 拒绝，不执行 handler。
+            let module = paramMap["module"] as? String ?? ""
+            if isRenderOnlyBlocked(module: module, source: source) {
+                print("render-only gate: module \"\(module)\" 仅允许渲染层调用，已拒绝来自 \(source) 的请求")
+                let errMap = DMPMap(["errMsg": "\(methodName):fail render-only"])
+                callback(errMap, .fail)
+                callback(DMPMap(), .complete)
+                return DMPNoneResult()
+            }
             ExtBridgeAPI.handle(
                 methodName: methodName,
                 param: param,
@@ -169,6 +200,11 @@ public class DMPContainer {
 
         // 3. extOnBridge / extOffBridge：methodName 格式为 "${module}_${event}"
         if let matchedModule = extModules.keys.first(where: { methodName.hasPrefix($0 + "_") }) {
+            // render-only 来源门：同样适用于持续订阅入口
+            if isRenderOnlyBlocked(module: matchedModule, source: source) {
+                print("render-only gate: module \"\(matchedModule)\" 仅允许渲染层调用，已拒绝来自 \(source) 的请求")
+                return DMPNoneResult()
+            }
             let event = String(methodName.dropFirst(matchedModule.count + 1))
             let successId = paramMap["success"] as? String ?? ""
             if !successId.isEmpty {

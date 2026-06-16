@@ -10,7 +10,8 @@ import Foundation
 class DMPChannelProxy {
     public static func messageHandler(
         type: String, body: DMPMap,
-        target: String, app: DMPApp
+        target: String, app: DMPApp,
+        source: DMPBridgeSource = .service
     ) -> Any {
         print("🔴 messageHandler:type=\(type) target=\(target) body=\(body.toJsonString())")
 
@@ -62,7 +63,7 @@ class DMPChannelProxy {
                 }
 
                 let param: DMPBridgeParam = DMPBridgeParam(value: body.get("params") as Any)
-                return app.container!.callBridgeMethod(methodName: name, webViewId: webViewId, param: param, app: app)
+                return app.container!.callBridgeMethod(methodName: name, webViewId: webViewId, param: param, app: app, source: source)
             } else if type == "domReady" {
                 app.container?.isNavigating = false
                 if let webview = webview {

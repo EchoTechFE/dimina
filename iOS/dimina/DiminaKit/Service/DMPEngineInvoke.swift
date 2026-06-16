@@ -24,7 +24,8 @@ public class DMPEngineInvoke {
             let target = msg!["target"] as! String
 
             let app = appResolver?()
-            let result = DMPChannelProxy.messageHandler(type: type, body: body, target: target, app: app!)
+            // 来源固定为 .service：此入口为逻辑层物理通道，小程序代码无法伪造
+            let result = DMPChannelProxy.messageHandler(type: type, body: body, target: target, app: app!, source: .service)
 
             if let syncResult = result as? DMPSyncResult {
                 return DMPBridgeParam.from(rawValue: syncResult.value).getJSValue(context: context)

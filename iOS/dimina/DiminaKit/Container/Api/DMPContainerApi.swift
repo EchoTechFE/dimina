@@ -14,15 +14,26 @@ import Foundation
     case complete
 }
 
+/// 桥调用来源。由消息进入的物理通道判定，小程序代码无法伪造。
+/// - `.render`：来自渲染层（`DMPWebViewInvoke` / `DiminaRenderBridge.invoke`）
+/// - `.service`：来自逻辑层（`DMPEngineInvoke` / `DiminaServiceBridge.invoke`）
+@objc public enum DMPBridgeSource: Int {
+    case render
+    case service
+}
+
 public class DMPBridgeEnv {
     let appIndex: Int
     let appId: String
     let webViewId: Int
+    /// 调用来源，用于 render-only 来源门判定。默认 `.service`（fail-safe）。
+    let source: DMPBridgeSource
 
-    init(appIndex: Int, appId: String, webViewId: Int) {
+    init(appIndex: Int, appId: String, webViewId: Int, source: DMPBridgeSource = .service) {
         self.appIndex = appIndex
         self.appId = appId
         self.webViewId = webViewId
+        self.source = source
     }
 }
 

@@ -195,9 +195,11 @@ public class DMPApp {
     ///
     /// - Parameters:
     ///   - moduleName: 模块名，与小程序侧 `module` 参数一致
+    ///   - renderOnly: true 时该模块仅允许渲染层调用（私有业务组件取数用），
+    ///                 逻辑层（小程序开发者代码）调用将被拒绝。默认 false，行为不变。
     ///   - handler:    处理器，详见 `DMPExtModuleHandler`
-    public func registerExtModule(_ moduleName: String, handler: @escaping DMPExtModuleHandler) {
-        container?.registerExtModule(moduleName, handler: handler)
+    public func registerExtModule(_ moduleName: String, renderOnly: Bool = false, handler: @escaping DMPExtModuleHandler) {
+        container?.registerExtModule(moduleName, renderOnly: renderOnly, handler: handler)
     }
 
     public func destroy() {

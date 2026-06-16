@@ -85,21 +85,23 @@ public class DMPAppManager {
     ///
     /// - Parameters:
     ///   - moduleName: 模块名，与小程序侧 `module` 参数一致
+    ///   - renderOnly: true 时该模块仅允许渲染层调用（私有业务组件取数用），
+    ///                 逻辑层（小程序开发者代码）调用将被拒绝。默认 false，行为不变。
     ///   - handler:    处理器，详见 `DMPExtModuleHandler`
-    public func registerExtModule(_ moduleName: String, handler: @escaping DMPExtModuleHandler) {
+    public func registerExtModule(_ moduleName: String, renderOnly: Bool = false, handler: @escaping DMPExtModuleHandler) {
         // 注册到所有已创建的 App 实例
-        appPools.values.forEach { $0.registerExtModule(moduleName, handler: handler) }
+        appPools.values.forEach { $0.registerExtModule(moduleName, renderOnly: renderOnly, handler: handler) }
         // 缓存起来，供后续新建的 App 初始化时使用
-        pendingExtModules[moduleName] = handler
+        pendingExtModules[moduleName] = (handler: handler, renderOnly: renderOnly)
     }
 
     /// 待注册的 ext 模块缓存，用于在 App 创建之前注册的模块能在 App 初始化后自动注入
-    private var pendingExtModules: [String: DMPExtModuleHandler] = [:]
+    private var pendingExtModules: [String: (handler: DMPExtModuleHandler, renderOnly: Bool)] = [:]
 
     /// 创建新 App 时自动注入已缓存的 ext 模块（内部使用）
     internal func applyPendingExtModules(to app: DMPApp) {
-        pendingExtModules.forEach { moduleName, handler in
-            app.registerExtModule(moduleName, handler: handler)
+        pendingExtModules.forEach { moduleName, entry in
+            app.registerExtModule(moduleName, renderOnly: entry.renderOnly, handler: entry.handler)
         }
     }
 }

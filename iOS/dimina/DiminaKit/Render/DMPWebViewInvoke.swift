@@ -133,7 +133,8 @@ public class DMPWebViewInvoke {
     
     public func processInvokeMessage(type: String, body: [String: Any], target: String) -> Any {
         if let app = self.render?.getApp() {
-            let result = DMPChannelProxy.messageHandler(type: type, body: DMPMap.fromDict(dict: body), target: target, app: app)
+            // 来源固定为 .render：此入口为渲染层物理通道，小程序代码无法伪造
+            let result = DMPChannelProxy.messageHandler(type: type, body: DMPMap.fromDict(dict: body), target: target, app: app, source: .render)
             return result
         }
 
