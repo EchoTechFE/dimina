@@ -7,4 +7,5 @@ export { DMPLaunchConfig, DMPOpenType } from './src/main/ets/DApp/config/DMPLaun
 export { DMPColorUtils } from './src/main/ets/Utils/DMPColorUtils';
 export { DMPContainerBridgesModule } from './src/main/ets/Bridges/DMPContainerBridgesModule';
 export { DMPBridgeCallback, DMPBridgeCallbackType } from './src/main/ets/Bridges/DMPTSUtil';
+export { DMPApiSource, DMPExtCallback, DMPExtModuleHandler } from './src/main/ets/Bridges/DMPExtModuleHandler';
 export { DMPMap } from './src/main/ets/Utils/DMPMap';

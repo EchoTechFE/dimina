@@ -200,6 +200,17 @@ public class DMPApp {
         container?.registerExtModule(moduleName, handler: handler)
     }
 
+    /// 注册渲染层启动脚本（用于注入 Web Component / 自定义元素 bundle 等）。
+    ///
+    /// 全局生效，等价于 `DMPAppManager.sharedInstance().registerRenderUserScript(_:)`。
+    /// 应在创建 WebView 之前调用；可多次调用累加。脚本仅注入渲染层 WebView，
+    /// 不注入逻辑层 JSContext。详见 `DMPAppManager.registerRenderUserScript(_:)`。
+    ///
+    /// - Parameter script: 要注入的 JavaScript 源码。
+    public func registerRenderUserScript(_ script: String) {
+        DMPAppManager.sharedInstance().registerRenderUserScript(script)
+    }
+
     public func destroy() {
         guard !isDestroyed else {
             return

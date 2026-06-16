@@ -147,4 +147,18 @@ class Dimina private constructor(context: Context) {
     fun registerExtModule(moduleName: String, handler: ExtModuleHandler) {
         MiniApp.getInstance().registerExtModule(moduleName, handler)
     }
+
+    /**
+     * 注册渲染层启动脚本。
+     *
+     * 用于向每个渲染层 WebView 注入宿主提供的启动脚本（例如 Web Component bundle）。
+     * 脚本在 WebView 创建后注入：支持时通过 `addDocumentStartJavaScript` 在文档开始时执行，
+     * 否则回退到渲染页面加载完成后执行。建议在 [init] 之后、[startMiniProgram] 之前调用，
+     * 可多次调用累加多个脚本。仅作用于渲染层 WebView，不影响逻辑层。
+     *
+     * @param script 要注入的 JavaScript 源码
+     */
+    fun registerRenderUserScript(script: String) {
+        MiniApp.getInstance().registerRenderUserScript(script)
+    }
 }

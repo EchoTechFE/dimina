@@ -2,6 +2,7 @@
 import web_webview from '@ohos.web.webview'
 import { DMPWebViewController } from './DMPWebViewController'
 import { DMPAppManager } from '../DApp/DMPAppManager'
+import { DMPApp } from '../DApp/DMPApp'
 import { DMPNodeController } from '../Render/SameLayer/DMPNodeController'
 import { NodeRenderType } from '@kit.ArkUI'
 import { RequestCallback } from '../Render/UrlIntercepter/UrlInterceptor'
@@ -102,6 +103,7 @@ export struct DMPWebComponent {
           this.endTime = systemDateTime.getTime()
           const total = this.endTime - this.startTime;
           DMPLogger.d(Tags.DMP_WEB_COMPONENT, 'webViewId:' + this.webViewId + ' onPageEnd ' + total)
+          this.injectRenderUserScripts()
           this.controller.notifyPageEnd()
         })
         .onControllerAttached(() => {
@@ -239,6 +241,19 @@ export struct DMPWebComponent {
 
   private getComponentParams(stack: DMPPageRecord, componentId: string): DMPMap {
     return stack.componentParams.get(componentId) ?? stack.componentParams[componentId] ?? new DMPMap()
+  }
+
+  // 注入接入方通过 DMPApp.registerRenderUserScript 注册的渲染层启动脚本。
+  // 落点在 onPageEnd（pageFrame 渲染运行时已就绪、DiminaRenderBridge 已注入），
+  // 且早于 notifyPageEnd() 触发的业务渲染资源加载。executeScript 自带 pending 队列兜底。
+  private injectRenderUserScripts() {
+    const scripts: string[] = DMPApp.renderUserScripts
+    if (scripts.length === 0) {
+      return
+    }
+    scripts.forEach((script: string) => {
+      this.render.executeScript(script, this.webViewId)
+    })
   }
 
   private printLog(message?: ConsoleMessage) {

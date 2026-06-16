@@ -6,10 +6,11 @@ import { DMPMap } from '../Utils/DMPMap';
 import { DMPPageRecord } from '../Navigator/DMPPageRecord';
 import { ResourceLoadType } from '../Container/DMPContainer';
 import { Tags } from '../EventTrack/Tags';
+import { DMPApiSource } from '../Bridges/DMPExtModuleHandler';
 
 export class DMPChannelProxyNext {
   public static messageHandlerNext(type: string, body: DMPMap,
-    target: string, app: DMPApp): DMPMap | number | string | boolean | object {
+    target: string, app: DMPApp, source: DMPApiSource = 'service'): DMPMap | number | string | boolean | object {
     // DMPLogger.d(Tags.LAUNCH, `messageHandlerNext:type=${type} target=${target} methodName=${body.get('name')}`)
     DMPLogger.i(Tags.LAUNCH, `messageHandlerNext:type=${type} target=${target} methodName=${body.get('name')} bridgeId=${body.get('bridgeId')}`)
     let transMsg = new DMPMap({
@@ -65,10 +66,10 @@ export class DMPChannelProxyNext {
 
         if (typeof body.get('params') == 'string' || typeof body.get('params') == 'number' ||
           typeof body.get('params') == 'boolean' || Array.isArray(body.get('params'))) {
-          return app.container.callBridgeMethods(name, webViewId, body.get('params'), app)
+          return app.container.callBridgeMethods(name, webViewId, body.get('params'), app, source)
         } else {
           return app.container.callBridgeMethods(name, webViewId,
-            DMPMap.createFromObject(body.get('params')), app)
+            DMPMap.createFromObject(body.get('params')), app, source)
         }
       } else if (type === 'domReady') {
         app.container.isNavigating = false
@@ -118,10 +119,11 @@ export class DMPChannelProxyNext {
   }
 
   public static messageHandlerWithAppIndex(type: string, body: DMPMap,
-    target: string, appIndex: number): DMPMap | number | string | boolean | object {
+    target: string, appIndex: number,
+    source: DMPApiSource = 'service'): DMPMap | number | string | boolean | object {
     const app = DMPAppManager.sharedInstance().getApp(appIndex);
     if (app) {
-      return DMPChannelProxyNext.messageHandlerNext(type, body, target, app);
+      return DMPChannelProxyNext.messageHandlerNext(type, body, target, app, source);
     } else {
       return new DMPMap();
     }

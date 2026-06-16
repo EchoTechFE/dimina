@@ -63,7 +63,27 @@ class MiniApp private constructor() {
         fun getInstance(): MiniApp {
             return instance
         }
+
+        // 渲染层启动脚本（接入方注册的 Web Component bundle 等），在每个渲染层 WebView
+        // 创建后注入。接入方应在 webview 创建前（通常 SDK 初始化后、启动小程序前）调用，
+        // 可多次累加。线程安全的快照读取交由消费方处理。
+        private val renderUserScripts = java.util.concurrent.CopyOnWriteArrayList<String>()
     }
+
+    /**
+     * 注册渲染层启动脚本。脚本会在每个渲染层 WebView 创建后注入（文档开始时执行优先，
+     * 不支持时回退到页面加载完成后执行）。可多次调用累加。
+     *
+     * @param script 要注入的 JavaScript 源码
+     */
+    fun registerRenderUserScript(script: String) {
+        renderUserScripts.add(script)
+    }
+
+    /**
+     * 获取已注册的渲染层启动脚本快照（供 WebView 注入逻辑读取）。
+     */
+    fun getRenderUserScripts(): List<String> = renderUserScripts.toList()
 
     init {
         // Register API handlers that are common for all MiniPrograms
@@ -255,6 +275,7 @@ class MiniApp private constructor() {
         context: DiminaActivity,
         apiName: String,
         params: JSONObject,
+        source: String = "service",
         responseCallback: (String) -> Unit,
     ): JSValue? {
 
@@ -263,7 +284,7 @@ class MiniApp private constructor() {
             LogUtils.d(tag, "Invoking API: $apiName with params: $params")
 
             // Invoke the API
-            val result = apiRegistry.invoke(context, appId, apiName, params, responseCallback)
+            val result = apiRegistry.invoke(context, appId, apiName, params, source, responseCallback)
             if (result is AsyncResult) {
                 isAsyncMethod = true
                 val errorMsg = result.value.optString("errMsg", "")

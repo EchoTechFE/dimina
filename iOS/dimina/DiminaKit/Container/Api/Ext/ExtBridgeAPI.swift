@@ -29,7 +29,8 @@ public class ExtBridgeAPI: DMPContainerApi {
         param: DMPBridgeParam,
         env: DMPBridgeEnv,
         callback: DMPBridgeCallback?,
-        extModules: [String: DMPExtModuleHandler]
+        extModules: [String: DMPExtModuleHandler],
+        source: DMPBridgeSource = .service
     ) {
         let map = param.getMap()
         let module = map["module"] as? String ?? ""
@@ -56,6 +57,7 @@ public class ExtBridgeAPI: DMPContainerApi {
                 callback?(DMPMap(), .complete)
             }
         )
+        extCallback.source = source
 
         _ = handler(methodName, data, extCallback)
     }

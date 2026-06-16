@@ -9,30 +9,47 @@ import { NpmResolver } from './common/npm-resolver.js'
 let pathInfo = {}
 let configInfo = {}
 let npmResolver = null
+// 外部平台组件标签清单(接入方声明,名字任意)。命中的标签按内置组件处理(emit dd-<tag>),
+// 不降级 dd-text、不需 usingComponents、不注册成 Vue 组件 → render 回退成原生元素,供宿主注入的自定义元素接管。
+let externalComponents = []
 
 /**
  * 持久化编译过程的上下文
+ * @param {string} workPath 工作目录
+ * @param {{externalComponents?: string[]}} [options] 编译选项;externalComponents 声明外部平台组件标签
  */
-function storeInfo(workPath) {
+function storeInfo(workPath, options = {}) {
 	storePathInfo(workPath)
 	storeProjectConfig()
 	storeAppConfig()
 	storePageConfig()
 
+	externalComponents = Array.isArray(options.externalComponents) ? options.externalComponents : []
+
 	return {
 		pathInfo,
 		configInfo,
+		externalComponents,
 	}
 }
 
 function resetStoreInfo(opts) {
 	pathInfo = opts.pathInfo
 	configInfo = opts.configInfo
-	
+	externalComponents = Array.isArray(opts.externalComponents) ? opts.externalComponents : []
+
 	// 重新初始化 npm 解析器
 	if (pathInfo.workPath) {
 		npmResolver = new NpmResolver(pathInfo.workPath)
 	}
+}
+
+/**
+ * 获取接入方声明的外部平台组件标签清单
+ * @returns {string[]}
+ */
+function getExternalComponents() {
+	return externalComponents
 }
 
 function storePathInfo(workPath) {
@@ -377,6 +394,7 @@ export {
 	getAppName,
 	getComponent,
 	getContentByPath,
+	getExternalComponents,
 	getNpmResolver,
 	getPageConfigInfo,
 	getPages,

@@ -85,9 +85,19 @@ Android 端当前不修改系统 WebView / Chromium 内核，因此同层渲染�
 | ---------- | ------------------------------------------------------------------------------------------------------------- |
 | `slot`     | 支持默认插槽、具名插槽，以及 `slot="{{name}}"` 形式的动态插槽。具名插槽会转换为 Vue 插槽语法。                |
 | `template` | 支持通过 `<template name="...">` 定义模板，并通过 `<template is="..." data="...">` 使用模板。模板内容会在编译期收集并注入。 |
-| `wxs`      | 支持内联 WXS 和 `src` 外链 WXS；支持 WXS 内部 `require` 相对路径依赖，npm 组件内的 WXS 路径会做适配。          |
+| `wxs`      | 支持内联 WXS 和 `src` 外链 WXS；支持 WXS 内部 `require` 相对路径依赖，npm 组件内的 WXS 路径会做适配。WXS 在编译期会注入严格模式并做安全限制：禁止访问全局对象（`window`/`globalThis`/`self`/`global`/`document`/`Function`/`eval`）、禁止访问 `__proto__`/`prototype` 以及字符串字面量计算式 `['constructor'\|'__proto__'\|'prototype']`（静态 `.constructor` 仍按 WXS 规范改写为类型名）；命中以上会编译报错。 |
 | `include`  | 支持将目标 WXML/DDML 文件中除 `template`、`wxs`、`dds` 外的内容内联到当前位置；`include` 节点上的条件属性会保留并包裹到生成节点上。 |
 | `import`   | 支持导入目标 WXML/DDML 文件中的 `template` 与相关 WXS 依赖，导入节点本身会在编译期移除。                      |
+
+## 外部平台组件（externalComponents）
+
+宿主平台可声明一批**外部平台组件标签**（名字任意），让这些标签活过编译、保留为 `dd-<name>` 元素，由宿主在渲染层自行提供实现（例如注入自定义元素 / 原生组件），编译器只保留标签、不解析其实现，也不需要 `usingComponents`。
+
+- **声明**：编译入口 `build(targetPath, workPath, useAppIdDir, options)` 的 `options.externalComponents: string[]`。命中的标签走内置组件路径（emit `dd-<name>`），不降级为 `dd-text`，也不注册成 Vue 组件——因此在渲染层会回退成原生 `<dd-<name>>` 元素，宿主可用 `customElements.define` 等方式接管渲染。
+- **渲染/加载**：组件实现(自定义元素 bundle)由宿主在接入时注入渲染层 webview;dimina 提供渲染层启动脚本注册 API `registerRenderUserScript(script)`(iOS `DMPApp` / Android `Dimina` / Harmony `DMPApp`),把脚本在文档开始(`customElements.define` 早于业务渲染)注入每个渲染层 webview。dimina 编译/渲染运行时不内置组件实现。
+  - 注入时机:框架自身 render bridge bootstrap 之后(保证脚本里能用 `DiminaRenderBridge`);建议脚本仅做 `customElements.define`,依赖 bridge 的取数放进元素 `connectedCallback`。
+  - 调用约定:在启动小程序前注册(脚本需先于 webview 创建),全局对所有渲染层 webview 生效。
+- **取数来源**：这类组件经 `invokeAPI` 向容器取数时，框架会把调用来源 `source`（`render`/`service`，按物理通道判定、小程序不可伪造）透传给 API handler；是否据此区分由 handler 自行决定，框架不拦截。
 
 ## 自定义全局 API 命名空间
 

@@ -33,7 +33,7 @@ export default async function build(targetPath, workPath, useAppIdDir = true, op
 							{
 								title: '收集配置信息',
 								task: (ctx) => {
-									ctx.storeInfo = storeInfo(workPath)
+									ctx.storeInfo = storeInfo(workPath, options)
 								},
 							},
 							{

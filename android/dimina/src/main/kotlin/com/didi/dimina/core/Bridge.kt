@@ -165,8 +165,8 @@ class Bridge(
 
             "container" -> {
                 if (type == "invokeAPI") {
-                    // 调用容器侧 API
-                    return handleApiInvocation(body)
+                    // 调用容器侧 API，透传不可伪造的调用来源 source（service / render）
+                    return handleApiInvocation(body, source)
                 } else if (type == "domReady") {
                     // 隐藏 Loading
                     parent.onDomReady()
@@ -254,7 +254,7 @@ class Bridge(
     /**
      * Handles API invocation from JavaScript
      */
-    private fun handleApiInvocation(body: JSONObject): JSValue? {
+    private fun handleApiInvocation(body: JSONObject, source: String = "service"): JSValue? {
         try {
             val apiName = body.getString("name")
 
@@ -285,7 +285,8 @@ class Bridge(
                     appId = options.appId,
                     context = parent,
                     apiName = apiName,
-                    params = params
+                    params = params,
+                    source = source
                 ) { response ->
                     // Send response back to JavaScript
                     options.jscore.postMessage(response)

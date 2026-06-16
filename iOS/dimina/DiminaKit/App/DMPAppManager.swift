@@ -102,4 +102,24 @@ public class DMPAppManager {
             app.registerExtModule(moduleName, handler: handler)
         }
     }
+
+    // MARK: - Render User Script Registration
+
+    /// 已注册的渲染层启动脚本（全局，对所有小程序的每个渲染层 WebView 生效）。
+    ///
+    /// 仅注入到渲染层 WKWebView（不注入逻辑层 JSContext），且在框架自身的
+    /// render bridge bootstrap 之后追加，保证 `DiminaRenderBridge` 已就绪、
+    /// `customElements.define` 早于页面渲染（`.atDocumentStart`）。
+    public private(set) var renderUserScripts: [String] = []
+
+    /// 注册渲染层启动脚本（用于注入 Web Component / 自定义元素 bundle 等）。
+    ///
+    /// 宿主应在启动小程序、创建 WebView 之前调用；可多次调用累加。
+    /// 脚本会在每个渲染层 WebView 加载页面框架时、框架 bootstrap 注入之后，
+    /// 以 `WKUserScript(injectionTime: .atDocumentStart, forMainFrameOnly: false)` 注入。
+    ///
+    /// - Parameter script: 要注入的 JavaScript 源码。
+    public func registerRenderUserScript(_ script: String) {
+        renderUserScripts.append(script)
+    }
 }
