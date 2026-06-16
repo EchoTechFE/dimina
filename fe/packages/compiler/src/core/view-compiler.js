@@ -594,10 +594,24 @@ function processWxsContent(wxsContent, wxsFilePath, scriptModule, workPath, file
 	}
 
 	const replacements = []
+	const violations = []
+
+	// WXS 安全加固黑名单
+	const BANNED_GLOBALS = new Set(['window', 'globalThis', 'self', 'global', 'document', 'Function', 'eval'])
+	const BANNED_MEMBERS = new Set(['__proto__', 'prototype'])
 
 	// 遍历并处理各种转换
 	walk(wxsAst, {
-		enter(node) {
+		enter(node, parent) {
+			// WXS 安全加固：禁止引用危险全局标识符（仅限引用位置，不误伤属性名/对象键）
+			if (node.type === 'Identifier' && BANNED_GLOBALS.has(node.name)) {
+				const isMemberProp = parent?.type === 'MemberExpression' && parent.property === node && !parent.computed
+				const isObjectKey = parent?.type === 'Property' && parent.key === node && !parent.computed
+				if (!isMemberProp && !isObjectKey) {
+					violations.push(`全局对象 \`${node.name}\``)
+				}
+			}
+
 			if (node.type === 'CallExpression') {
 				const calleeName = node.callee?.name
 
@@ -698,11 +712,27 @@ function processWxsContent(wxsContent, wxsFilePath, scriptModule, workPath, file
 						value: `Object.prototype.toString.call(${objectCode}).slice(8, -1)`,
 					})
 				}
+				// WXS 安全加固：静态危险成员 .__proto__ / .prototype 一律禁止
+				else if (!node.computed && BANNED_MEMBERS.has(node.property?.name)) {
+					violations.push(`成员 \`${node.property.name}\``)
+				}
+				// WXS 安全加固：字符串字面量计算式访问 constructor/__proto__/prototype（堵 []['constructor'] 逃逸）
+				else if (node.computed && isStringLiteral(node.property)) {
+					const key = getStringLiteralRawValue(node.property)
+					if (key === 'constructor' || BANNED_MEMBERS.has(key)) {
+						violations.push(`计算式成员 \`${key}\``)
+					}
+				}
 			}
 		}
 	})
 
-	return applyCodeReplacements(wxsContent, replacements)
+	if (violations.length > 0) {
+		throw new Error(`[view] WXS 安全限制：${wxsFilePath || 'inline.wxs'} 命中禁用项 ${violations.join('、')}`)
+	}
+
+	// 注入严格模式：确保 fn.call(null) 时 this 不再指向全局对象
+	return `'use strict'\n${applyCodeReplacements(wxsContent, replacements)}`
 }
 
 /**

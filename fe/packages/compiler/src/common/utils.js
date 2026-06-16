@@ -177,6 +177,7 @@ const tagWhiteList = [
 	'root-portal',
 	'scroll-view',
 	'slider',
+	'spu-price',
 	'swiper-item',
 	'swiper',
 	'switch',
