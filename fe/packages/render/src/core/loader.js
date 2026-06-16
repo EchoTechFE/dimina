@@ -39,6 +39,31 @@ class Loader {
 		)
 	}
 
+	/**
+	 * Template HMR: re-fetch a recompiled page's view (+style) chunk with a
+	 * cache-bust query and re-register its module(s), so
+	 * runtime.hmrUpdateModule can swap the render in place. `resetPaths` are the
+	 * AMD module ids to drop first (the page, plus any edited nested component
+	 * whose def ships in the same page chunk) so the re-injected modDefine takes
+	 * effect; createModule then overwrites their staticModules entry.
+	 */
+	reloadModule(opts) {
+		const { appId, pagePath, root = '.', baseUrl = '/', resetPaths = [pagePath] } = opts
+		const filename = pagePath.replace(/\//g, '_')
+		const bust = `?hmr=${Date.now()}`
+		if (typeof window.modReset === 'function') {
+			for (const p of resetPaths) {
+				window.modReset(p)
+			}
+		}
+		return Promise.allSettled([
+			this.loadStyleFile(`${baseUrl}${appId}/${root}/${filename}.css${bust}`),
+			this.loadScriptFile(`${baseUrl}${appId}/${root}/${filename}.js${bust}`),
+		]).then(() => {
+			window.modRequire(pagePath)
+		})
+	}
+
 	loadStyleFile(path) {
 		return new Promise((resolve, reject) => {
 			const style = document.createElement('link')
@@ -75,12 +100,16 @@ class Loader {
 	 */
 	createModule(moduleInfo) {
 		const { path, usingComponents } = moduleInfo
-		if (this.staticModules[path]) {
-			return
-		}
-
+		// Template HMR: a re-injected (recompiled) chunk re-registers the same
+		// path. Overwrite the module definition in place so the new render lands
+		// in staticModules (runtime.hmrUpdateModule then reads it).
 		this.staticModules[path] = new Module(moduleInfo)
 
+		// Always walk usingComponents: on a fresh load this registers children;
+		// on an HMR re-register it lets a reset child (a recompiled nested
+		// component) re-run its factory and pick up its new render. Unreset
+		// children are AMD-LOADED so modRequire is a cheap no-op — but skipping
+		// the walk would strand an edited child component at its old render.
 		for (const componentPath of Object.values(usingComponents)) {
 			window.modRequire(componentPath)
 		}

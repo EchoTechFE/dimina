@@ -60,6 +60,30 @@ class Render {
 			success && callback.invoke(success, data)
 		})
 
+		// Template-HMR (dev only): container/devtools sends `hmrUpdate` when a
+		// recompiled change is template/style-class (see classifyChanges). Re-fetch
+		// the page's chunk (cache-busted) + re-register, then rerender in place
+		// preserving state. Any failure (unavailable HMR runtime, async-setup
+		// race timeout, fetch error) falls back to a full reload.
+		this.message.on('hmrUpdate', (msg) => {
+			const { appId, pagePath, root = '.', baseUrl = '/', modulePath, resetPaths } = msg || {}
+			loader.reloadModule({ appId, pagePath, root, baseUrl, resetPaths })
+				.then(() => runtime.hmrUpdateModule(modulePath || pagePath))
+				.then((ok) => { if (!ok) window.location.reload() })
+				.catch((e) => {
+					console.error('[system]', '[render]', 'hmrUpdate failed, full reload:', e)
+					window.location.reload()
+				})
+		})
+
+		// Template-HMR (dev only): expose the runtime + loader so the HMR client
+		// (and e2e) can drive `runtime.hmrUpdateModule(path)` after re-injecting a
+		// recompiled view chunk. DCE'd out of production builds.
+		if (__DEV__) {
+			window.__diminaRuntime = runtime
+			window.__diminaLoader = loader
+		}
+
 		if (__DEV__) {
 			// 可接收端容器或引擎日志
 			this.message.on('print', (msg) => {

@@ -242,6 +242,12 @@ class Runtime {
 				},
 				components: {
 					[rootCom]: {
+						// Stable HMR id (= dmcc deterministic module id). Vue's
+						// registerHMR tracks instances by `type.__hmrId` so a
+						// template-only recompile can `rerender(id, newRender)` in
+						// place, preserving setup state. No-op in production (the
+						// registerHMR branch is `__DEV__`-gated / DCE'd).
+						__hmrId: id,
 						__scopeId: sId,
 						async setup(_props, { expose }) {
 							expose()
@@ -406,6 +412,9 @@ class Runtime {
 
 			// setup -> beforeCreate -> beforeMount
 			components[`dd-${componentName}`] = {
+				// Stable HMR id (see page component above) — lets a recompiled
+				// custom component rerender in place. No-op in production.
+				__hmrId: id,
 				__scopeId: sId,
 				components: subComponents,
 				props: module.props,
@@ -630,6 +639,56 @@ class Runtime {
 				})
 			})
 		}
+	}
+
+	/**
+	 * 模板热更新：在该模块的 view chunk 已被重新注入（caller 先 modReset(path)
+	 * 再重载 chunk，使新 render 进入 loader.staticModules）之后调用，就地把新 render
+	 * 换给所有存活实例并强制重渲，保留 reactive setup state（不卸载/不重 setup）。
+	 *
+	 * 用 Vue 官方 `__VUE_HMR_RUNTIME__.rerender`（dev 构建才暴露；它清 renderCache、
+	 * 置 isHmrUpdating、遍历由 __hmrId 登记的实例）。返回是否成功；不可用或命中
+	 * async-setup 竞态超时返回 false，由 caller 降级为整机刷新。
+	 *
+	 * async-setup 门控（见 spike pr4-mechanism）：实例在 `await message.wait()` 期间
+	 * instance.job 尚未建，rerender 会抛（被 Vue tryWrap 吞但不生效）。故先等该模块
+	 * 所有 pending setup 结算，超时则不 rerender、报 false。
+	 */
+	async hmrUpdateModule(path) {
+		const HMR = globalThis.__VUE_HMR_RUNTIME__
+		const module = loader.getModuleByPath(path)
+		if (!HMR || !module?.moduleInfo) {
+			return false
+		}
+		const { id } = module.moduleInfo
+
+		const pendings = []
+		for (const [moduleId, inst] of this.instance) {
+			if (inst?.$?.type?.__hmrId === id) {
+				const p = this._pendingSetups.get(moduleId)
+				if (p) {
+					pendings.push(p)
+				}
+			}
+		}
+		if (pendings.length > 0) {
+			let timer
+			const timeout = new Promise((_, reject) => {
+				timer = setTimeout(() => reject(new Error('hmr-gate-timeout')), 1000)
+			})
+			try {
+				await Promise.race([Promise.all(pendings), timeout])
+			}
+			catch {
+				return false
+			}
+			finally {
+				clearTimeout(timer)
+			}
+		}
+
+		HMR.rerender(id, module.moduleInfo.render)
+		return true
 	}
 
 	/**

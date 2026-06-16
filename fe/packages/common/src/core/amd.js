@@ -14,6 +14,17 @@ function modDefine(id, factory) {
 		}
 	}
 }
+// 模块重置函数（热更新用）：丢弃已缓存的模块记录，使后续重新注入的
+// modDefine 生效、modRequire 重新执行 factory。没有它时 modDefine 的
+// `if (!JSModules[id])` 守卫会忽略重注入、modRequire 对 LOADED 模块直接返回
+// 旧 exports，热替换无从落地。返回是否确实清除了一个已存在的模块。
+function modReset(id) {
+	if (JSModules[id]) {
+		delete JSModules[id]
+		return true
+	}
+	return false
+}
 // 模块加载函数
 function modRequire(id, callback, errorCallback) {
 	if (typeof id !== 'string') {
@@ -70,4 +81,4 @@ modRequire.async = async (id) => {
 	})
 }
 
-export { modDefine, modRequire }
+export { modDefine, modRequire, modReset }

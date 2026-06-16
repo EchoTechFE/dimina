@@ -14,18 +14,26 @@ function createDist() {
  * 发布到指定目录
  * @param {string} dist 目标路径
  * @param {boolean} useAppIdDir 是否在路径中包含appId
+ * @param {{ incremental?: boolean }} [opts] 增量模式：不清空最终目录，只覆写本次产物
  */
-function publishToDist(dist, useAppIdDir = true) {
+function publishToDist(dist, useAppIdDir = true, opts = {}) {
 	const distPath = getTargetPath()
 	const appId = getAppId()
 	const absolutePath = useAppIdDir
 		? `${path.resolve(process.cwd(), dist)}${path.sep}${appId}`
 		: `${path.resolve(process.cwd(), dist)}`
-	
-	if (fs.existsSync(absolutePath)) {
-		fs.rmSync(absolutePath, { recursive: true, force: true })
+
+	// 增量模式：保留最终目录已有产物，仅把本次（受影响）产物覆写过去。
+	// 未受影响的产物文件不被重建，inode 保持不变。
+	if (opts.incremental) {
+		fs.mkdirSync(absolutePath, { recursive: true })
 	}
-	fs.mkdirSync(absolutePath, { recursive: true })
+	else {
+		if (fs.existsSync(absolutePath)) {
+			fs.rmSync(absolutePath, { recursive: true, force: true })
+		}
+		fs.mkdirSync(absolutePath, { recursive: true })
+	}
 
 	// 复制目录内容
 	function copyDir(src, dest) {

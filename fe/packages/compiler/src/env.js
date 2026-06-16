@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { resolveMiniProgramPath, toMiniProgramModuleId } from './common/path-utils.js'
-import { isObjectEmpty, uuid } from './common/utils.js'
+import { isObjectEmpty, stableModuleId } from './common/utils.js'
 import { NpmResolver } from './common/npm-resolver.js'
 
 let pathInfo = {}
@@ -226,7 +226,7 @@ function storeComponentConfig(pageJsonContent, pageFilePath) {
 		}, {})
 
 		configInfo.componentInfo[moduleId] = {
-			id: uuid(),
+			id: stableModuleId(moduleId),
 			path: moduleId,
 			component: isComponent,
 			usingComponents: cComponents,
@@ -339,7 +339,7 @@ function getPages() {
 		const mergedComponents = { ...globalComponents, ...pageComponents }
 		
 		return {
-			id: uuid(),
+			id: stableModuleId(path),
 			path,
 			usingComponents: mergedComponents,
 		}
@@ -358,7 +358,7 @@ function getPages() {
 				const mergedComponents = { ...globalComponents, ...pageComponents }
 				
 				return {
-					id: uuid(),
+					id: stableModuleId(fullPath),
 					path: fullPath,
 					usingComponents: mergedComponents,
 				}

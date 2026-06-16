@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { createHash } from 'node:crypto'
 import artCode from './art.js'
 
 function hasCompileInfo(modulePath, list, preList) {
@@ -144,6 +145,22 @@ function uuid() {
 	return Math.random().toString(36).slice(2, 7)
 }
 
+/**
+ * Deterministic module id derived from a module's canonical path.
+ *
+ * Replaces `uuid()` for the page/component `id` (which becomes the runtime
+ * `data-v-${id}` scope id and Vue HMR record key): a random id changes every
+ * build, so a recompiled chunk's scope id no longer matches the mounted DOM /
+ * HMR record — breaking state-preserving hot-reload. Hashing the canonical path
+ * makes the id stable across builds and unique per module. A leading letter is
+ * guaranteed so `data-v-${id}` is always a valid CSS identifier.
+ */
+function stableModuleId(modulePath) {
+	const hex = createHash('sha1').update(String(modulePath)).digest('hex')
+	const base36 = BigInt(`0x${hex}`).toString(36).slice(0, 8).padStart(8, '0')
+	return /^[a-z]/.test(base36) ? base36 : `d${base36.slice(0, 7)}`
+}
+
 const tagWhiteList = [
 	'page',
 	'wrapper',
@@ -195,6 +212,7 @@ export {
 	getAbsolutePath,
 	hasCompileInfo,
 	isObjectEmpty,
+	stableModuleId,
 	tagWhiteList,
 	transformRpx,
 	uuid,

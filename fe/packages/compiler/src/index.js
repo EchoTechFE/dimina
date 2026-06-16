@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import { Listr } from 'listr2'
 import { createDist, publishToDist } from './common/publish.js'
+import { computePlan, filterPagesForWorker } from './common/incremental.js'
 import { artCode } from './common/utils.js'
 import { workerPool } from './common/worker-pool.js'
 import { NpmBuilder } from './common/npm-builder.js'
@@ -18,7 +19,7 @@ let isPrinted = false
  * @param {boolean} useAppIdDir 产物根目录是否包含appId
  */
 export default async function build(targetPath, workPath, useAppIdDir = true, options = {}) {
-	const { sourcemap = false } = options
+	const { sourcemap = false, changedFiles = null } = options
 	if (!isPrinted) {
 		artCode()
 		isPrinted = true
@@ -65,31 +66,53 @@ export default async function build(targetPath, workPath, useAppIdDir = true, op
 					const pages = getPages()
 					ctx.pages = pages
 
+					// 计算增量计划（无 changedFiles → full，行为与现状一致）
+					const componentInfo = ctx.storeInfo?.configInfo?.componentInfo || {}
+					const plan = computePlan(changedFiles, pages, componentInfo)
+					ctx.plan = plan
+					const isIncremental = plan.mode === 'incremental'
+
+					// 增量模式下，样式 worker 在「过滤后」的主包页前追加 app 样式；
+					// 全量模式保持现状：在共享的 ctx.pages.mainPages 上 unshift（影响返回值取页逻辑）。
+					const viewPages = isIncremental ? filterPagesForWorker(pages, plan, 'view') : null
+					const logicPages = isIncremental ? filterPagesForWorker(pages, plan, 'logic') : null
+					let styleWorkerPages = null
+					if (isIncremental) {
+						const filteredStyle = filterPagesForWorker(pages, plan, 'style')
+						styleWorkerPages = {
+							...filteredStyle,
+							mainPages: [{ path: 'app', id: '' }, ...filteredStyle.mainPages],
+						}
+					}
+
 					return task.newListr(
 						[
 							{
 								title: '编译页面文件',
 								task: async (ctx, task) => {
 									// ddml, wxml
-									return runCompileInWorker('view', ctx, task, { sourcemap })
+									return runCompileInWorker('view', ctx, task, { sourcemap, pages: viewPages })
 								},
 							},
 							{
 								title: '编译页面逻辑',
 								task: async (ctx, task) => {
-									return runCompileInWorker('logic', ctx, task, { sourcemap })
+									return runCompileInWorker('logic', ctx, task, { sourcemap, pages: logicPages })
 								},
 							},
 							{
 								title: '编译样式文件',
 								task: async (ctx, task) => {
 									// ddss, wxss
-									// 主包添加 app 样式
-									pages.mainPages.unshift({
-										path: 'app',
-										id: '',
-									})
-									return runCompileInWorker('style', ctx, task, { sourcemap })
+									if (!isIncremental) {
+										// 主包添加 app 样式（与现状一致，mutate 共享引用）
+										pages.mainPages.unshift({
+											path: 'app',
+											id: '',
+										})
+										return runCompileInWorker('style', ctx, task, { sourcemap })
+									}
+									return runCompileInWorker('style', ctx, task, { sourcemap, pages: styleWorkerPages })
 								},
 							},
 						],
@@ -99,8 +122,10 @@ export default async function build(targetPath, workPath, useAppIdDir = true, op
 			},
 			{
 				title: '输出编译产物',
-				task: () => {
-					publishToDist(targetPath, useAppIdDir)
+				task: (ctx) => {
+					publishToDist(targetPath, useAppIdDir, {
+						incremental: ctx.plan?.mode === 'incremental',
+					})
 				},
 			},
 		],
@@ -121,13 +146,15 @@ export default async function build(targetPath, workPath, useAppIdDir = true, op
 }
 
 function runCompileInWorker(script, ctx, task, options = {}) {
+	// 每个 worker 可携带各自的 pages 子集（增量编译）；缺省回退到完整 pages。
+	const workerPages = options.pages || ctx.pages
 	return workerPool.runWorker(() => new Promise((resolve, reject) => {
 		const worker = new Worker(
 			path.join(path.dirname(fileURLToPath(import.meta.url)), `core/${script}-compiler.js`),
 			workerPool.getWorkerOptions(),
 		)
-		const totalTasks = Object.keys(ctx.pages.mainPages).length
-			+ Object.values(ctx.pages.subPages).reduce((sum, item) => sum + item.info.length, 0)
+		const totalTasks = Object.keys(workerPages.mainPages).length
+			+ Object.values(workerPages.subPages).reduce((sum, item) => sum + item.info.length, 0)
 
 		let isResolved = false
 		let workerError = null
@@ -140,7 +167,7 @@ function runCompileInWorker(script, ctx, task, options = {}) {
 			reject(error)
 		}
 
-		worker.postMessage({ pages: ctx.pages, storeInfo: ctx.storeInfo, sourcemap: !!options.sourcemap })
+		worker.postMessage({ pages: workerPages, storeInfo: ctx.storeInfo, sourcemap: !!options.sourcemap })
 		// 接收 Worker 完成后的消息
 		worker.on('message', (message) => {
 			try {
