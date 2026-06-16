@@ -4,6 +4,7 @@ import { Bridge } from '@/core/bridge'
 import { JSCore } from '@/core/jscore'
 import { HashRouter } from '@/utils/hashRouter'
 import { mergePageConfig, queryPath, readFile, sleep, uuid } from '@/utils/util'
+import { isRenderOnlyBlocked } from './render-only-gate'
 
 // 等待元素上指定 transition property 结束，带超时兜底防止动画未触发时永久阻塞
 const waitTransitionEnd = (el, property, timeout = WAIT_TRANSITION_TIMEOUT_MS) =>
@@ -202,17 +203,27 @@ export class MiniApp {
 	 * 注册自定义 API 处理函数
 	 * @param {string} name API 名称
 	 * @param {function} handler 处理函数，接收 (params)
+	 * @param {{renderOnly?: boolean}} [options] renderOnly=仅允许渲染层调用(私有业务组件取数用)
 	 */
-	registerApi(name, handler) {
+	registerApi(name, handler, options = {}) {
 		this.apiRegistry[name] = handler
+		if (options.renderOnly) {
+			(this.renderOnlyApis ||= new Set()).add(name)
+		}
 	}
 
 	/**
 	 * 按名称调用 API，优先查找自定义注册 → 内置方法 → 第三方扩展路由
 	 * @param {string} name API 名称
 	 * @param {object} params API 参数
+	 * @param {string} [source] 调用来源('render'|'service')，由容器按物理通道判定，不可被小程序伪造
 	 */
-	invokeApi(name, params) {
+	invokeApi(name, params, source) {
+		// render-only 来源门:私有业务组件取数 API 拒绝非渲染层(开发者 realm)调用
+		if (isRenderOnlyBlocked(name, source, this.renderOnlyApis)) {
+			console.warn('[container]', `API \`${name}\` 仅允许渲染层调用，已拒绝来自 ${source || 'unknown'} 的请求`)
+			return
+		}
 		const handler = this.apiRegistry[name]
 		if (handler) {
 			handler.call(this, params)
