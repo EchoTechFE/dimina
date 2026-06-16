@@ -212,17 +212,18 @@ export class MiniApp {
 	 * @param {string} name API 名称
 	 * @param {object} params API 参数
 	 */
-	invokeApi(name, params) {
+	invokeApi(name, params, source) {
 		const handler = this.apiRegistry[name]
 		if (handler) {
-			handler.call(this, params)
+			// 透传 source:render-only 业务组件的 handler 自行判定来源(框架不拦)
+			handler.call(this, params, source)
 		}
 		else if (typeof this[name] === 'function') {
 			this[name](params)
 		}
 		else {
 			// 未命中已知方法，转发给第三方扩展路由处理
-			this._handleExtCall(name, params)
+			this._handleExtCall(name, params, source)
 		}
 	}
 
@@ -2235,14 +2236,14 @@ export class MiniApp {
 	 *   - extBridge：params 中携带 module 字段
 	 *   - extOnBridge vs extOffBridge：evtId 存在且 success 有值 → on；否则 → off
 	 */
-	_handleExtCall(name, params = {}) {
+	_handleExtCall(name, params = {}, source) {
 		if (params.module !== undefined) {
 			// ── extBridge ─────────────────────────────────────────────
-			this._extBridgeCall(name, params)
+			this._extBridgeCall(name, params, source)
 		}
 		else if (params.success) {
 			// ── extOnBridge：name = `${module}_${event}` ──────────────
-			this._extOnBridgeCall(name, params)
+			this._extOnBridgeCall(name, params, source)
 		}
 		else {
 			// ── extOffBridge：name = `${module}_${event}` ─────────────
@@ -2255,7 +2256,7 @@ export class MiniApp {
 	 * invokeAPI(event, { module, data, success, fail, complete, keep })
 	 * → container: name=event, params={ module, data, success, fail, complete }
 	 */
-	_extBridgeCall(event, params) {
+	_extBridgeCall(event, params, source) {
 		const { module, data = {}, success, fail, complete } = params
 		const onSuccess = this.createCallbackFunction(success)
 		const onFail = this.createCallbackFunction(fail)
@@ -2274,6 +2275,8 @@ export class MiniApp {
 			handler({
 				event,
 				data,
+				// 透传 source(render/service),render-only 模块的 handler 自判来源
+				source,
 				success: (res) => {
 					onSuccess?.(res)
 					onComplete?.()
@@ -2298,7 +2301,7 @@ export class MiniApp {
 	 * 通过遍历已注册模块名匹配前缀来还原 module 与 event，
 	 * 避免模块名本身含下划线时解析出错。
 	 */
-	_extOnBridgeCall(eventKey, params) {
+	_extOnBridgeCall(eventKey, params, source) {
 		const { success } = params
 		const onCallback = this.createCallbackFunction(success)
 
@@ -2318,6 +2321,8 @@ export class MiniApp {
 			const unsubscribe = handler({
 				event,
 				data: { isSustain: true },
+				// 透传 source(render/service),render-only 模块的 handler 自判来源
+				source,
 				success: res => onCallback?.(res),
 				fail: err => console.error(`[container] extOnBridge error (${eventKey}):`, err),
 			})

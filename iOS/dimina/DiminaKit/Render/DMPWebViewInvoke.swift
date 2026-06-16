@@ -133,7 +133,7 @@ public class DMPWebViewInvoke {
     
     public func processInvokeMessage(type: String, body: [String: Any], target: String) -> Any {
         if let app = self.render?.getApp() {
-            let result = DMPChannelProxy.messageHandler(type: type, body: DMPMap.fromDict(dict: body), target: target, app: app)
+            let result = DMPChannelProxy.messageHandler(type: type, body: DMPMap.fromDict(dict: body), target: target, app: app, source: .render)
             return result
         }
 

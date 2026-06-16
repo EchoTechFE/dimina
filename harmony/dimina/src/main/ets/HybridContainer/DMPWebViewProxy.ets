@@ -22,7 +22,8 @@ export class DMPWebViewProxy {
   invoke(msg: Message): number | string | boolean | object {
     const app = DMPAppManager.sharedInstance().getApp(this.appIndex);
     if (app) {
-      return DMPChannelProxyNext.messageHandlerNext(msg.type, DMPMap.createFromObject(msg.body), msg.target, app);
+      // 来源不可伪造：此入口为渲染层实例（带可信 webViewId/appIndex），故 source='render'
+      return DMPChannelProxyNext.messageHandlerNext(msg.type, DMPMap.createFromObject(msg.body), msg.target, app, 'render');
     } else {
       DMPLogger.e(Tags.BRIDGE, '>>>>>>>app is dead')
       return new DMPMap();

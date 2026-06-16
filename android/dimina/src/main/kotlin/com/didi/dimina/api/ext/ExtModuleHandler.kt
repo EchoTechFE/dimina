@@ -43,9 +43,39 @@ fun interface ExtModuleHandler {
 }
 
 /**
+ * 不可伪造的调用来源，由框架在分发时透传给 [ExtCallback]。
+ *
+ * - [SERVICE]：来自逻辑线程（service）的调用。
+ * - [RENDER]：来自渲染线程（render / webview）的调用。
+ *
+ * handler 可读取 [ExtCallback.source] 自行判断是否允许执行（A1：框架只透传，不设门）。
+ */
+enum class ApiInvokeSource {
+    SERVICE,
+    RENDER;
+
+    companion object {
+        /**
+         * 将框架内部的来源字符串映射为枚举；未知来源一律按 [SERVICE] 处理（保守默认）。
+         */
+        fun fromString(value: String?): ApiInvokeSource =
+            when (value) {
+                "render" -> RENDER
+                else -> SERVICE
+            }
+    }
+}
+
+/**
  * 回调接口，用于将 native 结果传回 JS 层。
  */
 interface ExtCallback {
     fun onSuccess(result: org.json.JSONObject = org.json.JSONObject())
     fun onFail(error: org.json.JSONObject)
+
+    /**
+     * 本次调用的来源（不可伪造）。默认 [ApiInvokeSource.SERVICE]，
+     * 现有实现者无需改动；框架的内部实现会覆盖此值为真实来源。
+     */
+    val source: ApiInvokeSource get() = ApiInvokeSource.SERVICE
 }

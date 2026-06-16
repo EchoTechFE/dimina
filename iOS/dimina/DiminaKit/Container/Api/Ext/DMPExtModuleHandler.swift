@@ -5,11 +5,26 @@
 
 import Foundation
 
+/// bridge 调用的来源端，框架在两个不可伪造的入口处确定：
+/// - `.render`：来自 `DMPWebViewInvoke`（WKScriptMessageHandler invokeHandler）。
+/// - `.service`：来自 `DMPEngineInvoke`（JSContext DiminaServiceBridge.invoke）。
+///
+/// 透传给 ext 模块 handler 供其自行判定是否拒绝某来源；框架本身不做拦截。
+/// 默认值为 `.service`（fail-safe：未显式标注时按更受限的 service 来源对待）。
+public enum DMPBridgeSource {
+    case render
+    case service
+}
+
 /// 第三方扩展 bridge 模块的事件回调。
 /// 框架在收到 native 结果后通过此对象将数据回传给 JS 层。
 public class DMPExtCallback {
     private let onSuccessFn: (DMPMap) -> Void
     private let onFailFn: (DMPMap) -> Void
+
+    /// 不可伪造的调用来源，由框架在构造时写入。handler 可据此自行判定是否拒绝。
+    /// 默认 `.service`（fail-safe）。
+    public var source: DMPBridgeSource = .service
 
     init(
         onSuccess: @escaping (DMPMap) -> Void,

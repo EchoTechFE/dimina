@@ -1,4 +1,5 @@
 import { DMPBridges } from '../Bridges/DMPBridges';
+import { DMPApiSource } from '../Bridges/DMPExtModuleHandler';
 import { DMPApp } from '../DApp/DMPApp';
 import { DMPChannelProxyNext } from '../Service/DMPChannelProxyNext';
 import { DMPMap } from '../Utils/DMPMap';
@@ -67,8 +68,9 @@ export class DMPContainer {
   }
 
   public callBridgeMethods(methodName: string, webViewId: number,
-    params: DMPMap | number | string | boolean | object, app: DMPApp): number | string | boolean | object {
-    return DMPBridges.callMethodsNext(methodName, webViewId, params, app.appIndex, app.appModuleManager)
+    params: DMPMap | number | string | boolean | object, app: DMPApp,
+    source: DMPApiSource = 'service'): number | string | boolean | object {
+    return DMPBridges.callMethodsNext(methodName, webViewId, params, app.appIndex, app.appModuleManager, source)
   }
 
   public callWebviewBridgeMethods(methodName: string, webViewId: number,

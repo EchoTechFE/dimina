@@ -98,8 +98,9 @@ export class Bridge {
 		else if (target === 'container') {
 			if (type === 'invokeAPI') {
 				const { name, params } = body
-				// parent 是 miniApp 对象
-				this.parent.invokeApi(name, params)
+				// parent 是 miniApp 对象;透传 source(render/service,由容器按物理通道判定、小程序不可伪造)
+				// 供 render-only 业务组件的 handler 自行判定来源,框架本身不拦
+				this.parent.invokeApi(name, params, source)
 			}
 		}
 	}

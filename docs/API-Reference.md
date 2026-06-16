@@ -85,7 +85,7 @@ Android 端当前不修改系统 WebView / Chromium 内核，因此同层渲染�
 | ---------- | ------------------------------------------------------------------------------------------------------------- |
 | `slot`     | 支持默认插槽、具名插槽，以及 `slot="{{name}}"` 形式的动态插槽。具名插槽会转换为 Vue 插槽语法。                |
 | `template` | 支持通过 `<template name="...">` 定义模板，并通过 `<template is="..." data="...">` 使用模板。模板内容会在编译期收集并注入。 |
-| `wxs`      | 支持内联 WXS 和 `src` 外链 WXS；支持 WXS 内部 `require` 相对路径依赖，npm 组件内的 WXS 路径会做适配。          |
+| `wxs`      | 支持内联 WXS 和 `src` 外链 WXS；支持 WXS 内部 `require` 相对路径依赖，npm 组件内的 WXS 路径会做适配。WXS 在编译期会注入严格模式并做安全限制：禁止访问全局对象（`window`/`globalThis`/`self`/`global`/`document`/`Function`/`eval`）、禁止访问 `__proto__`/`prototype` 以及字符串字面量计算式 `['constructor'\|'__proto__'\|'prototype']`（静态 `.constructor` 仍按 WXS 规范改写为类型名）；命中以上会编译报错。 |
 | `include`  | 支持将目标 WXML/DDML 文件中除 `template`、`wxs`、`dds` 外的内容内联到当前位置；`include` 节点上的条件属性会保留并包裹到生成节点上。 |
 | `import`   | 支持导入目标 WXML/DDML 文件中的 `template` 与相关 WXS 依赖，导入节点本身会在编译期移除。                      |
 

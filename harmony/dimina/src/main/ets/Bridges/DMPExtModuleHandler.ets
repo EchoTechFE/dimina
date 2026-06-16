@@ -1,10 +1,25 @@
 import { DMPMap } from '../Utils/DMPMap';
 
 /**
+ * 不可伪造的调用来源标识：
+ * - 'render'  ：来自渲染层（DMPWebViewProxy.invoke）
+ * - 'service' ：来自逻辑层 worker（DMPWorkerCaller.toContainer）
+ *
+ * 框架在构造 callback 时按真实入口赋值，ext handler 可据此自行判断。
+ */
+export type DMPApiSource = 'render' | 'service';
+
+/**
  * 第三方扩展 bridge 模块的回调类，用于将 native 结果传回 JS 层。
  * ArkTS 要求使用 class 而非 interface 的字面量实现，故声明为抽象类。
  */
 export abstract class DMPExtCallback {
+  /**
+   * 调用来源，由框架在构造时赋值，默认 'service'。
+   * 这是具体属性（非 abstract），不强制子类实现。
+   */
+  source: DMPApiSource = 'service';
+
   abstract onSuccess(result: DMPMap): void;
   abstract onFail(error: DMPMap): void;
 }

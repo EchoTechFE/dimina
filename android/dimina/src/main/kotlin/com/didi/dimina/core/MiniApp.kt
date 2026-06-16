@@ -255,6 +255,7 @@ class MiniApp private constructor() {
         context: DiminaActivity,
         apiName: String,
         params: JSONObject,
+        source: String = "service",
         responseCallback: (String) -> Unit,
     ): JSValue? {
 
@@ -263,7 +264,7 @@ class MiniApp private constructor() {
             LogUtils.d(tag, "Invoking API: $apiName with params: $params")
 
             // Invoke the API
-            val result = apiRegistry.invoke(context, appId, apiName, params, responseCallback)
+            val result = apiRegistry.invoke(context, appId, apiName, params, source, responseCallback)
             if (result is AsyncResult) {
                 isAsyncMethod = true
                 val errorMsg = result.value.optString("errMsg", "")

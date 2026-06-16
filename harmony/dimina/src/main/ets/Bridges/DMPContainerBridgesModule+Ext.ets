@@ -1,7 +1,7 @@
 import { DMPMap } from '../Utils/DMPMap';
 import { DMPContainerBridgesModule } from './DMPContainerBridgesModule';
 import { DMPBridgeCallback, DMPBridgeCallbackType } from './DMPTSUtil';
-import { DMPExtCallback, DMPExtModuleHandler } from './DMPExtModuleHandler';
+import { DMPApiSource, DMPExtCallback, DMPExtModuleHandler } from './DMPExtModuleHandler';
 import { DMPLogger } from '../EventTrack/DMPLogger';
 import { Tags } from '../EventTrack/Tags';
 import { DMPApp } from '../DApp/DMPApp';
@@ -103,7 +103,8 @@ export class DMPContainerBridgesModuleExt extends DMPContainerBridgesModule {
    * @param callback   框架组装的回调分发函数
    * @param moduleName 宿主模块名
    */
-  handleExtBridge(event: string, data: DMPMap, callback: DMPBridgeCallback, moduleName: string) {
+  handleExtBridge(event: string, data: DMPMap, callback: DMPBridgeCallback, moduleName: string,
+    source: DMPApiSource = 'service') {
     const handler = this.extModules.get(moduleName);
     if (!handler) {
       DMPLogger.e(Tags.BRIDGE, `extBridge:fail module "${moduleName}" not registered`);
@@ -115,6 +116,7 @@ export class DMPContainerBridgesModuleExt extends DMPContainerBridgesModule {
     }
 
     const extCallback = new ExtBridgeCallback(event, callback);
+    extCallback.source = source;
 
     try {
       handler(event, data, extCallback);
@@ -142,6 +144,7 @@ export class DMPContainerBridgesModuleExt extends DMPContainerBridgesModule {
     callback: DMPBridgeCallback,
     moduleName: string,
     realEvent: string,
+    source: DMPApiSource = 'service',
   ) {
     const handler = this.extModules.get(moduleName);
     if (!handler) {
@@ -157,6 +160,7 @@ export class DMPContainerBridgesModuleExt extends DMPContainerBridgesModule {
     this.cancelSubscription(subKey);
 
     const extCallback = new ExtOnBridgeCallback(realEvent, callback);
+    extCallback.source = source;
 
     try {
       const cancelFn = handler(realEvent, data, extCallback);
