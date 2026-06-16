@@ -10,7 +10,7 @@ import { transform } from 'esbuild'
 import * as htmlparser2 from 'htmlparser2'
 import { checkTemplateCompatibility } from '../common/compatibility.js'
 import { collectAssets, getAbsolutePath, tagWhiteList, transformRpx } from '../common/utils.js'
-import { getAppId, getComponent, getContentByPath, getTargetPath, getWorkPath, resetStoreInfo } from '../env.js'
+import { getAppId, getComponent, getContentByPath, getExternalComponents, getTargetPath, getWorkPath, resetStoreInfo } from '../env.js'
 import { parseBindings } from '../common/expression-parser.js'
 
 const fileType = ['.wxml', '.ddml']
@@ -585,19 +585,33 @@ function compileModule(module, isComponent, scriptRes, options = {}) {
  * @returns {string} 处理后的 wxs 代码
  */
 function processWxsContent(wxsContent, wxsFilePath, scriptModule, workPath, filePath) {
-	let wxsAst
-	try {
-		wxsAst = parseJs(wxsContent, wxsFilePath || 'inline.wxs', 'script')
-	} catch (error) {
-		console.error(`[view] 解析 wxs 文件失败: ${wxsFilePath}`, error.message)
-		return wxsContent // 返回原始内容
+	// fail-closed：oxc parseSync 不抛异常,语法错误在 errors 里;解析有误则无法做安全加固,不能原样放行未加固的 WXS
+	const parsed = parseSync(wxsFilePath || 'inline.wxs', wxsContent, { sourceType: 'script', lang: 'js' })
+	if (parsed.errors?.length > 0) {
+		const first = parsed.errors[0]
+		throw new Error(`[view] WXS 解析失败,无法做安全加固: ${wxsFilePath || 'inline.wxs'} — ${first?.message ?? first}`)
 	}
+	const wxsAst = parsed.program
 
 	const replacements = []
+	const violations = []
+
+	// WXS 安全加固黑名单
+	const BANNED_GLOBALS = new Set(['window', 'globalThis', 'self', 'global', 'document', 'Function', 'eval'])
+	const BANNED_MEMBERS = new Set(['__proto__', 'prototype'])
 
 	// 遍历并处理各种转换
 	walk(wxsAst, {
-		enter(node) {
+		enter(node, parent) {
+			// WXS 安全加固：禁止引用危险全局标识符（仅限引用位置，不误伤属性名/对象键）
+			if (node.type === 'Identifier' && BANNED_GLOBALS.has(node.name)) {
+				const isMemberProp = parent?.type === 'MemberExpression' && parent.property === node && !parent.computed
+				const isObjectKey = parent?.type === 'Property' && parent.key === node && !parent.computed
+				if (!isMemberProp && !isObjectKey) {
+					violations.push(`全局对象 \`${node.name}\``)
+				}
+			}
+
 			if (node.type === 'CallExpression') {
 				const calleeName = node.callee?.name
 
@@ -698,11 +712,35 @@ function processWxsContent(wxsContent, wxsFilePath, scriptModule, workPath, file
 						value: `Object.prototype.toString.call(${objectCode}).slice(8, -1)`,
 					})
 				}
+				// WXS 安全加固：静态危险成员 .__proto__ / .prototype 一律禁止
+				else if (!node.computed && BANNED_MEMBERS.has(node.property?.name)) {
+					violations.push(`成员 \`${node.property.name}\``)
+				}
+				// WXS 安全加固：计算式访问 constructor/__proto__/prototype（堵 []['constructor'] / [`constructor`] 逃逸）
+				// 用 cooked 值比较：防 `['constructor']` 这类转义绕过(raw≠cooked);并覆盖无表达式模板字面量
+				else if (node.computed) {
+					let key = null
+					if (isStringLiteral(node.property)) {
+						key = node.property.value
+					}
+					else if (node.property?.type === 'TemplateLiteral' && node.property.expressions.length === 0) {
+						key = node.property.quasis?.[0]?.value?.cooked
+					}
+					// 注：运行时计算键(变量 / 字符串拼接 / fromCharCode 等)无法静态判定,属已知残留(需 SES)
+					if (key === 'constructor' || BANNED_MEMBERS.has(key)) {
+						violations.push(`计算式成员 \`${key}\``)
+					}
+				}
 			}
 		}
 	})
 
-	return applyCodeReplacements(wxsContent, replacements)
+	if (violations.length > 0) {
+		throw new Error(`[view] WXS 安全限制：${wxsFilePath || 'inline.wxs'} 命中禁用项 ${violations.join('、')}`)
+	}
+
+	// 注入严格模式：确保 fn.call(null) 时 this 不再指向全局对象
+	return `'use strict'\n${applyCodeReplacements(wxsContent, replacements)}`
 }
 
 /**
@@ -1201,10 +1239,11 @@ function transTag(opts) {
 		// 动态组件
 		res = tag
 	}
-	else if (!tagWhiteList.includes(tag)) {
+	else if (!tagWhiteList.includes(tag) && !getExternalComponents().includes(tag)) {
 		res = 'dd-text'
 	}
 	else {
+		// 内置组件,或接入方声明的外部平台组件(externalComponents,名字任意)
 		res = `dd-${tag}`
 	}
 

@@ -103,7 +103,8 @@ public class DMPContainer {
     }
 
     public func callBridgeMethod(
-        methodName: String, webViewId: Int, param: DMPBridgeParam, app: DMPApp
+        methodName: String, webViewId: Int, param: DMPBridgeParam, app: DMPApp,
+        source: DMPBridgeSource = .service
     ) -> DMPAPIResult {
         let moduleName = "DMPContainerBridgesModule"
         print("Bridge call: module=\(moduleName), method=\(methodName)")
@@ -162,7 +163,8 @@ public class DMPContainer {
                 param: param,
                 env: env,
                 callback: callback,
-                extModules: extModules
+                extModules: extModules,
+                source: source
             )
             return DMPNoneResult()
         }
@@ -176,7 +178,8 @@ public class DMPContainer {
                     module: matchedModule,
                     event: event,
                     eventKey: methodName,
-                    successCallbackId: successId
+                    successCallbackId: successId,
+                    source: source
                 )
             } else {
                 handleExtOffBridge(eventKey: methodName)
@@ -193,7 +196,8 @@ public class DMPContainer {
         module: String,
         event: String,
         eventKey: String,
-        successCallbackId: String
+        successCallbackId: String,
+        source: DMPBridgeSource = .service
     ) {
         guard let handler = extModules[module] else { return }
 
@@ -213,6 +217,7 @@ public class DMPContainer {
                 print("extOnBridge error (\(eventKey)): \(error.toJsonString())")
             }
         )
+        extCallback.source = source
 
         let unsubscribe = handler(event, DMPMap(), extCallback)
         if let unsubscribe {

@@ -46,6 +46,7 @@ export class DMPApp {
   private _container: DMPContainer = new DMPContainer(this)
   private static _context: common.UIAbilityContext
   private static _apiNamespaces: string[] = []
+  private static _renderUserScripts: string[] = []
   private _containerBridges: DMPBridges = new DMPBridges()
   private static _entryContext: DMPEntryContext
   private _appModuleManager: DMPAppModuleManager = new DMPAppModuleManager(this)
@@ -311,6 +312,23 @@ export class DMPApp {
    */
   registerExtModule(moduleName: string, handler: DMPExtModuleHandler): void {
     this._appModuleManager.registerExtModule(moduleName, handler);
+  }
+
+  /**
+   * 注册渲染层启动脚本（如 Web Component bundle）。
+   *
+   * 须在小程序启动、渲染层 Web 组件创建之前调用，可多次调用累加。
+   * 每个渲染层 Web 组件就绪时（在框架自身 render bridge 注入之后）会按注册顺序注入这些脚本。
+   * 仅注入渲染层 Web，不影响逻辑层 worker。
+   *
+   * @param script  渲染层要执行的 JavaScript 源码
+   */
+  public static registerRenderUserScript(script: string): void {
+    DMPApp._renderUserScripts.push(script);
+  }
+
+  public static get renderUserScripts(): string[] {
+    return DMPApp._renderUserScripts;
   }
 
   destroyEngine() {

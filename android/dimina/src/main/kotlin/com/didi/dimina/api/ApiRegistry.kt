@@ -53,6 +53,7 @@ class ApiRegistry {
         appId: String,
         apiName: String,
         params: JSONObject,
+        source: String = "service",
         responseCallback: (String) -> Unit,
     ): APIResult {
         // 1. 优先命中已注册的标准 API
@@ -62,7 +63,7 @@ class ApiRegistry {
 
         // 2. extBridge：未命中且 params 携带 "module" 字段
         if (params.has("module")) {
-            return extBridgeApi.handleAction(activity, appId, apiName, params, responseCallback)
+            return extBridgeApi.handleAction(activity, appId, apiName, params, source, responseCallback)
         }
 
         // 3. extOnBridge / extOffBridge：apiName 格式为 "${module}_${event}"
@@ -71,7 +72,7 @@ class ApiRegistry {
             val event = apiName.removePrefix("${matchedModule}_")
             val successId = params.optString("success", "")
             return if (successId.isNotEmpty()) {
-                handleExtOnBridge(matchedModule, event, apiName, params, successId, responseCallback)
+                handleExtOnBridge(matchedModule, event, apiName, params, successId, source, responseCallback)
             } else {
                 handleExtOffBridge(apiName)
                 NoneResult()
@@ -91,6 +92,7 @@ class ApiRegistry {
         eventKey: String,
         params: JSONObject,
         successCallbackId: String,
+        source: String,
         responseCallback: (String) -> Unit,
     ): APIResult {
         val handler = extModules[module] ?: return NoneResult()
@@ -98,7 +100,10 @@ class ApiRegistry {
         // 若已有相同订阅，先取消旧的
         extSubscriptions.remove(eventKey)?.run()
 
+        val invokeSource = com.didi.dimina.api.ext.ApiInvokeSource.fromString(source)
         val callback = object : com.didi.dimina.api.ext.ExtCallback {
+            override val source = invokeSource
+
             override fun onSuccess(result: JSONObject) {
                 responseCallback(ApiUtils.createCallbackResponse(successCallbackId, result))
             }

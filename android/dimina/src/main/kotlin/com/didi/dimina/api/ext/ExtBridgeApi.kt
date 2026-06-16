@@ -39,6 +39,18 @@ class ExtBridgeApi(
         params: JSONObject,
         responseCallback: (String) -> Unit,
     ): APIResult {
+        // 标准 API 路径（无 source），按保守默认 SERVICE 处理
+        return handleAction(activity, appId, apiName, params, "service", responseCallback)
+    }
+
+    fun handleAction(
+        activity: DiminaActivity,
+        appId: String,
+        apiName: String,
+        params: JSONObject,
+        source: String,
+        responseCallback: (String) -> Unit,
+    ): APIResult {
         val module = params.optString("module", "")
         val data = params.optJSONObject("data") ?: JSONObject()
 
@@ -50,7 +62,10 @@ class ExtBridgeApi(
             })
         }
 
+        val invokeSource = ApiInvokeSource.fromString(source)
         val callback = object : ExtCallback {
+            override val source = invokeSource
+
             override fun onSuccess(result: JSONObject) {
                 result.put("errMsg", "$apiName:ok")
                 ApiUtils.invokeSuccess(params, result, responseCallback)

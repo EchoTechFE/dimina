@@ -7,6 +7,7 @@ import { Tags } from '../EventTrack/Tags';
 import { DMPApp } from '../DApp/DMPApp';
 import { DMPModuleManager } from './DMPModuleManager';
 import { DMPContainerBridgesModuleExt } from './DMPContainerBridgesModule+Ext';
+import { DMPApiSource } from './DMPExtModuleHandler';
 
 export class DMPBridges {
   static callWebViewMethods(methodName: string, webViewId: number,
@@ -55,7 +56,8 @@ export class DMPBridges {
 
   static callMethodsNext(methodName: string, webViewId: number,
     params: DMPMap | number | string | boolean | object, appIndex: number,
-    moduleManager: DMPModuleManager): number | string | boolean | object {
+    moduleManager: DMPModuleManager,
+    source: DMPApiSource = 'service'): number | string | boolean | object {
     const callback: DMPBridgeCallback = (args: DMPMap, cbType: DMPBridgeCallbackType) => {
       if (params instanceof DMPMap) {
         let id = ''
@@ -86,7 +88,7 @@ export class DMPBridges {
         DMPChannelProxyNext.ContainerToService(msg, appIndex)
       }
     }
-    const result = DMPBridges.invokeContainerMethodInfo(methodName, webViewId, params, callback, moduleManager)
+    const result = DMPBridges.invokeContainerMethodInfo(methodName, webViewId, params, callback, moduleManager, source)
     return result;
   }
 
@@ -99,7 +101,8 @@ export class DMPBridges {
   * */
   private static invokeContainerMethodInfo(methodName: string, webViewId: number,
     params: DMPMap | number | string | boolean | object, callback: DMPBridgeCallback,
-    moduleManager: DMPModuleManager): number | string | boolean | object {
+    moduleManager: DMPModuleManager,
+    source: DMPApiSource = 'service'): number | string | boolean | object {
     let moduleName = 'DMPContainerBridgesModule';
     let invokeParams = params;
     if (params instanceof DMPMap && params.get('module')) {
@@ -117,7 +120,7 @@ export class DMPBridges {
       if (extMod && extMod.hasModule(moduleName)) {
         DMPLogger.d(Tags.BRIDGE, `extBridge: moduleName=${moduleName} event=${methodName}`);
         extMod.handleExtBridge(methodName, invokeParams instanceof DMPMap ? invokeParams : new DMPMap(),
-          callback, moduleName);
+          callback, moduleName, source);
         return new Object();
       }
     }
@@ -139,7 +142,7 @@ export class DMPBridges {
             DMPLogger.d(Tags.BRIDGE, `extOnBridge: module=${mod} event=${evt}`);
             extMod.handleExtOnBridge(methodName,
               params instanceof DMPMap ? params : new DMPMap(),
-              callback, mod, evt);
+              callback, mod, evt, source);
           }
           return new Object();
         }

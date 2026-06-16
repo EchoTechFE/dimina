@@ -15,6 +15,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.didi.dimina.common.LogUtils
 import com.didi.dimina.common.PathUtils
 import com.didi.dimina.common.VersionUtils
@@ -555,6 +557,8 @@ internal fun createWebViewClientWithInterceptor(
             super.onPageFinished(view, url)
             LogUtils.d(WEBVIEW_TAG, "WebView page finished loading: $url")
             if (url.contains("pageFrame.html")) {
+                // 回退注入：仅当不支持 addDocumentStartJavaScript 时生效
+                injectRenderUserScriptsOnPageFinished(view)
                 onPageFinished(url)
             }
         }
@@ -596,6 +600,48 @@ private fun isUnderRoot(file: File, root: File): Boolean =
     file.path == root.path || file.path.startsWith(root.path + File.separator)
 
 /**
+ * 当前运行环境是否支持文档开始脚本注入（addDocumentStartJavaScript）。
+ */
+private fun isDocumentStartScriptSupported(): Boolean =
+    WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+
+/**
+ * 在渲染层 WebView 创建时安装宿主注册的启动脚本。
+ * 优先使用 addDocumentStartJavaScript（文档开始时执行，复用缓存的 WebView 也只需安装一次）。
+ * 不支持该特性时不在此处理，由 onPageFinished 回退路径在 pageFrame.html 加载完成后注入。
+ * 没有注册脚本时零影响。
+ */
+private fun installRenderUserScripts(webView: WebView) {
+    val scripts = com.didi.dimina.core.MiniApp.getInstance().getRenderUserScripts()
+    if (scripts.isEmpty()) return
+    if (!isDocumentStartScriptSupported()) return
+    scripts.forEach { script ->
+        try {
+            WebViewCompat.addDocumentStartJavaScript(webView, script, setOf("*"))
+        } catch (e: Exception) {
+            LogUtils.e(WEBVIEW_TAG, "Failed to addDocumentStartJavaScript", e)
+        }
+    }
+}
+
+/**
+ * onPageFinished 回退注入：仅当不支持 addDocumentStartJavaScript 时使用。
+ * 没有注册脚本时零影响。
+ */
+private fun injectRenderUserScriptsOnPageFinished(webView: WebView) {
+    if (isDocumentStartScriptSupported()) return
+    val scripts = com.didi.dimina.core.MiniApp.getInstance().getRenderUserScripts()
+    if (scripts.isEmpty()) return
+    scripts.forEach { script ->
+        try {
+            webView.evaluateJavascript(script, null)
+        } catch (e: Exception) {
+            LogUtils.e(WEBVIEW_TAG, "Failed to evaluate render user script", e)
+        }
+    }
+}
+
+/**
  * 创建配置好的WebView实例
  * 此函数统一了WebView的配置逻辑，包括布局参数、JavaScript设置、调试模式等
  * 
@@ -634,6 +680,9 @@ internal fun createWebView(context: Context, onPageLoadFinished: () -> Unit, app
 
         // Configure WebViewClient with file interceptor
         webViewClient = createWebViewClientWithInterceptor(context, appId) { onPageLoadFinished() }
+
+        // 安装宿主注册的渲染层启动脚本（文档开始时执行优先；不支持时由 onPageFinished 回退）
+        installRenderUserScripts(this)
     }
 }
 

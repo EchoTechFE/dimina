@@ -198,8 +198,22 @@ public class DMPWebview: NSObject, WKNavigationDelegate, WKScriptMessageHandler,
         """, injectionTime: .atDocumentStart, forMainFrameOnly: false)
 
         webView.configuration.userContentController.addUserScript(bootstrapScript)
+
+        // 在框架 bootstrap 之后追加宿主注册的渲染层启动脚本，
+        // 保证 DiminaRenderBridge 已就绪、customElements.define 早于页面渲染。
+        // 仅注入渲染层 WebView，不影响逻辑层 JSContext。
+        // 注意：池复用时 prepareForReuse()/cleanupWebView() 会 removeAllUserScripts()，
+        // 而本方法在每次 loadPageFrame() 时重新执行，因此复用的 WebView 也会重新注入。
+        for source in DMPAppManager.sharedInstance().renderUserScripts {
+            let userScript = WKUserScript(
+                source: source,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
+            )
+            webView.configuration.userContentController.addUserScript(userScript)
+        }
     }
-    
+
     // Load page framework
     public func loadPageFrame(enableVConsole: Bool = false) {
         let pageFramePath = enableVConsole ? "dimina:///pageFrame.html?vconsole=1" : "dimina:///pageFrame.html"
