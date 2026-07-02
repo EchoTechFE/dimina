@@ -260,7 +260,7 @@ async function compileML(pages, root, progress) {
 		});`
 			const { code: minifiedCode } = await transform(amdFormat, {
 				minify: true,
-				target: ['es2020'],
+				target: ['es2019'],
 				platform: 'browser',
 			})
 			mergeRender += minifiedCode

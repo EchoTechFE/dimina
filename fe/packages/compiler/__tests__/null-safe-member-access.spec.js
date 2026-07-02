@@ -3,6 +3,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 
+function stripStringLiterals(code) {
+	return code.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""')
+}
+
 describe('模板表达式空值保护', () => {
 	let tempDir
 	let originalTargetPath
@@ -25,7 +29,7 @@ describe('模板表达式空值保护', () => {
 		}
 	})
 
-	it('应该为成员访问生成可选链', async () => {
+	it('应该为成员访问生成兼容旧浏览器的空值保护', async () => {
 		fs.writeFileSync(path.join(tempDir, 'app.json'), JSON.stringify({
 			pages: ['pages/home/index'],
 		}))
@@ -60,7 +64,10 @@ describe('模板表达式空值保护', () => {
 		await compileML(getPages().mainPages, null, { completedTasks: 0 })
 
 		const output = fs.readFileSync(path.join(outputDir, 'main/pages_home_index.js'), 'utf-8')
-		expect(output).toContain('stickyProps?.zIndex||"1"')
+		const executableOutput = stripStringLiterals(output)
+		expect(executableOutput).not.toContain('?.')
+		expect(output).toContain('==null?void 0')
+		expect(output).toContain('zIndex')
 		expect(output).not.toContain('stickyProps.zIndex||"1"')
 	})
 
@@ -88,13 +95,16 @@ describe('模板表达式空值保护', () => {
 		await compileML(getPages().mainPages, null, { completedTasks: 0 })
 
 		const output = fs.readFileSync(path.join(outputDir, 'main/pages_text_index.js'), 'utf-8')
-		expect(output).toContain('obj1?.name')
-		expect(output).toContain('obj2?.a?.b')
+		const executableOutput = stripStringLiterals(output)
+		expect(executableOutput).not.toContain('?.')
+		expect(output).toContain('==null?void 0')
+		expect(output).toContain('obj1')
+		expect(output).toContain('obj2')
 		expect(output).not.toContain('obj1.name')
 		expect(output).not.toContain('obj2.a.b')
 	})
 
-	it('应该为计算属性访问生成合法的可选链', async () => {
+	it('应该为计算属性访问生成兼容旧浏览器的空值保护', async () => {
 		fs.writeFileSync(path.join(tempDir, 'app.json'), JSON.stringify({
 			pages: ['pages/computed/index'],
 		}))
@@ -119,9 +129,11 @@ describe('模板表达式空值保护', () => {
 		await compileML(getPages().mainPages, null, { completedTasks: 0 })
 
 		const output = fs.readFileSync(path.join(outputDir, 'main/pages_computed_index.js'), 'utf-8')
-		expect(output).toContain('selected?.[')
-		expect(output).toContain(']?.isSelected')
-		expect(output).toContain('coupons?.[0]?.countDownTime')
+		const executableOutput = stripStringLiterals(output)
+		expect(executableOutput).not.toContain('?.')
+		expect(output).toContain('==null?void 0')
+		expect(output).toContain('isSelected')
+		expect(output).toContain('countDownTime')
 		expect(output).not.toContain('selected?[')
 		expect(output).not.toContain('coupons?[0]')
 	})
