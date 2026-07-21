@@ -36,6 +36,7 @@ import { DMPContainerBridgesModuleVideo } from './DMPContainerBridgesModule+Vide
 import { DMPContainerBridgesModuleTabBar } from './DMPContainerBridgesModule+TabBar';
 import { DMPContainerBridgesModuleFile } from './DMPContainerBridgesModule+File';
 import { DMPContainerBridgesModuleCanvas } from './DMPContainerBridgesModule+Canvas';
+import { DMPContainerBridgesModuleScreen } from './DMPContainerBridgesModule+Screen';
 
 
 export class DMPAppModuleManager extends DMPModuleManager {
@@ -46,6 +47,12 @@ export class DMPAppModuleManager extends DMPModuleManager {
   private extModules: Map<string, DMPExtModuleHandler> = new Map();
   /** 懒创建的 Ext Bridge 模块实例 */
   private extBridgeModule: DMPContainerBridgesModuleExt | null = null;
+  /** Screen 模块实例（含系统截图监听），销毁引擎时需要清理系统监听 */
+  private screenModule: DMPContainerBridgesModuleScreen | null = null;
+
+  getScreenModule(): DMPContainerBridgesModuleScreen | null {
+    return this.screenModule;
+  }
 
   registerExtModule(moduleName: string, handler: DMPExtModuleHandler): void {
     this.extModules.set(moduleName, handler);
@@ -103,6 +110,8 @@ export class DMPAppModuleManager extends DMPModuleManager {
     this.registerModule(new DMPContainerBridgesModuleNavigateToMiniProgram(app))
     this.registerModule(new DMPContainerBridgesModuleTabBar(app))
     this.registerModule(new DMPContainerBridgesModuleCanvas(app))
+    this.screenModule = new DMPContainerBridgesModuleScreen(app)
+    this.registerModule(this.screenModule)
   }
 }
 
