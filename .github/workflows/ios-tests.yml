@@ -1,0 +1,51 @@
+name: iOS Tests
+
+on:
+  push:
+    paths:
+      - 'iOS/**'
+  pull_request:
+    paths:
+      - 'iOS/**'
+  workflow_dispatch:
+
+jobs:
+  unit-test:
+    name: Unit Tests
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Cache Swift Package Manager dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+          key: ${{ runner.os }}-spm-${{ hashFiles('iOS/dimina.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Run unit tests
+        working-directory: ./iOS
+        run: |
+          xcodebuild test \
+            -project dimina.xcodeproj \
+            -scheme dimina \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -only-testing:diminaTests \
+            -resultBundlePath TestResults.xcresult
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-test-results
+          path: ./iOS/TestResults.xcresult
+          retention-days: 5
