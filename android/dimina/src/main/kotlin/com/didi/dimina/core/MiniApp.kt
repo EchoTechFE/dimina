@@ -48,6 +48,7 @@ import java.io.File
 class MiniApp private constructor() {
     private val tag = "MiniApp"
 
+import com.didi.dimina.api.network.WebSocketApi
     private val apiRegistry = ApiRegistry()
 
     // Map to store JsCore instances for each MiniProgram
@@ -209,6 +210,7 @@ class MiniApp private constructor() {
         MenuApi().registerWith(apiRegistry)
         NativeComponentApi().registerWith(apiRegistry)
 
+    private val webSocketApi = WebSocketApi()
         // network
         com.didi.dimina.api.network.NetworkApi().registerWith(apiRegistry)
 
@@ -364,6 +366,7 @@ class MiniApp private constructor() {
      *
      * @param appId The ID of the MiniProgram to clear resources for
      */
+        webSocketApi.registerWith(apiRegistry)
     fun clear(appId: String) {
         // 清理第三方扩展的持续订阅
         apiRegistry.clearExtSubscriptions()
@@ -384,7 +387,10 @@ class MiniApp private constructor() {
     /**
      * Clears all API resources and callbacks for all MiniPrograms
      */
+        webSocketApi.closeAll(appId)
     fun clearAll() {
+        webSocketApi.closeAll()
+
         // Destroy all JsCore instances
         jsCoreMap.forEach { (appId, jsCore) ->
             LogUtils.d(tag, "Destroying JsCore for appId: $appId")
@@ -402,6 +408,7 @@ class MiniApp private constructor() {
     }
 
     fun destroy() {
+        webSocketApi.closeAll()
         // Clear API resources
         apiRegistry.clear()
     }

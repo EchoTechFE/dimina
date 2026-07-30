@@ -1,6 +1,138 @@
 import { invokeAPI } from '@/api/common'
 import { callback, isFunction } from '@dimina/common'
 
+const ARRAY_BUFFER_BASE64_KEY = '__diminaArrayBufferBase64'
+const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const BASE64_LOOKUP = Object.fromEntries(Array.from(BASE64_CHARS, (char, index) => [char, index]))
+const EVENT_APIS = {
+	open: ['onSocketOpen', 'offSocketOpen'],
+	message: ['onSocketMessage', 'offSocketMessage'],
+	error: ['onSocketError', 'offSocketError'],
+	close: ['onSocketClose', 'offSocketClose'],
+}
+
+function isArrayBuffer(value) {
+	return Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+}
+
+function toArrayBuffer(value) {
+	if (isArrayBuffer(value)) {
+		return value
+	}
+	if (value && value.buffer && isArrayBuffer(value.buffer)) {
+		return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+	}
+	return null
+}
+
+function arrayBufferToBase64(buffer) {
+	const bytes = new Uint8Array(buffer)
+	let result = ''
+	let index = 0
+	for (; index + 2 < bytes.length; index += 3) {
+		result += BASE64_CHARS[bytes[index] >> 2]
+		result += BASE64_CHARS[((bytes[index] & 3) << 4) | (bytes[index + 1] >> 4)]
+		result += BASE64_CHARS[((bytes[index + 1] & 15) << 2) | (bytes[index + 2] >> 6)]
+		result += BASE64_CHARS[bytes[index + 2] & 63]
+	}
+	if (index < bytes.length) {
+		result += BASE64_CHARS[bytes[index] >> 2]
+		if (index + 1 < bytes.length) {
+			result += BASE64_CHARS[((bytes[index] & 3) << 4) | (bytes[index + 1] >> 4)]
+			result += BASE64_CHARS[(bytes[index + 1] & 15) << 2]
+			result += '='
+		}
+		else {
+			result += BASE64_CHARS[(bytes[index] & 3) << 4]
+			result += '=='
+		}
+	}
+	return result
+}
+
+function base64ToArrayBuffer(base64) {
+	const clean = String(base64 || '').replace(/[\r\n\s]/g, '')
+	if (!clean) {
+		return new ArrayBuffer(0)
+	}
+	const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0
+	const bytes = new Uint8Array((clean.length * 3 / 4) - padding)
+	let byteIndex = 0
+	for (let index = 0; index < clean.length; index += 4) {
+		const c1 = BASE64_LOOKUP[clean[index]]
+		const c2 = BASE64_LOOKUP[clean[index + 1]]
+		const c3 = clean[index + 2] === '=' ? 0 : BASE64_LOOKUP[clean[index + 2]]
+		const c4 = clean[index + 3] === '=' ? 0 : BASE64_LOOKUP[clean[index + 3]]
+		if (byteIndex < bytes.length) bytes[byteIndex++] = (c1 << 2) | (c2 >> 4)
+		if (byteIndex < bytes.length) bytes[byteIndex++] = ((c2 & 15) << 4) | (c3 >> 2)
+		if (byteIndex < bytes.length) bytes[byteIndex++] = ((c3 & 3) << 6) | c4
+	}
+	return bytes.buffer
+}
+
+function encodeSocketData(data) {
+	const buffer = toArrayBuffer(data)
+	return buffer
+		? { [ARRAY_BUFFER_BASE64_KEY]: arrayBufferToBase64(buffer) }
+		: data
+}
+
+function decodeSocketMessage(result) {
+	const data = result?.data
+	if (data && typeof data === 'object' && data[ARRAY_BUFFER_BASE64_KEY] !== undefined) {
+		return {
+			...result,
+			data: base64ToArrayBuffer(data[ARRAY_BUFFER_BASE64_KEY]),
+		}
+	}
+	return result
+}
+
+function createListenerRegistry(socketId, onEvent) {
+	const listeners = Object.fromEntries(Object.keys(EVENT_APIS).map(event => [event, new Map()]))
+
+	return {
+		on(event, listener) {
+			if (!isFunction(listener) || listeners[event].has(listener)) {
+				return
+			}
+			const wrapped = (result) => {
+				onEvent?.(event, result)
+				listener(event === 'message' ? decodeSocketMessage(result) : result)
+			}
+			const listenerId = callback.store(wrapped, true)
+			listeners[event].set(listener, listenerId)
+			const params = { listenerId, success: listenerId }
+			if (socketId) {
+				params.socketId = socketId
+			}
+			return invokeAPI(EVENT_APIS[event][0], params)
+		},
+		off(event, listener) {
+			const params = {}
+			if (socketId) {
+				params.socketId = socketId
+			}
+			if (isFunction(listener)) {
+				const listenerId = listeners[event].get(listener)
+				if (!listenerId) {
+					return
+				}
+				params.listenerId = listenerId
+				listeners[event].delete(listener)
+				callback.remove(listenerId)
+			}
+			else {
+				for (const listenerId of listeners[event].values()) {
+					callback.remove(listenerId)
+				}
+				listeners[event].clear()
+			}
+			return invokeAPI(EVENT_APIS[event][1], params)
+		},
+	}
+}
+
 /**
  * https://developers.weixin.qq.com/miniprogram/dev/api/network/websocket/SocketTask.html
  * SocketTask 类，用于管理 WebSocket 连接
@@ -18,9 +150,16 @@ class SocketTask {
 	send(opts = {}) {
 		const { data, success, fail, complete, ...rest } = opts
 		
+		this._listenerRegistry = createListenerRegistry(socketId, (event) => {
+			if (event === 'open') {
+				this._readyState = SocketTask.OPEN
+			}
+			else if (event === 'close' || event === 'error') {
+				this._readyState = SocketTask.CLOSED
+			}
+		})
 		const params = {
 			socketId: this.socketId,
-			data,
 			...rest
 		}
 
@@ -68,96 +207,64 @@ class SocketTask {
 	 * 监听 WebSocket 连接打开事件
 	 * @param {Function} callback 回调函数
 	 */
+			data: encodeSocketData(data),
 	onOpen(callbackFn) {
-		if (isFunction(callbackFn)) {
-			return invokeAPI('onSocketOpen', {
-				socketId: this.socketId,
-				callback: callback.store(callbackFn, true)
-			})
-		}
 	}
 
 	/**
 	 * 取消监听 WebSocket 连接打开事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.on('open', callbackFn)
 	offOpen(callbackFn) {
-		return invokeAPI('offSocketOpen', {
-			socketId: this.socketId,
-			callback: callbackFn
-		})
 	}
 
 	/**
 	 * 监听 WebSocket 接受到服务器的消息事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.off('open', callbackFn)
 	onMessage(callbackFn) {
-		if (isFunction(callbackFn)) {
-			return invokeAPI('onSocketMessage', {
-				socketId: this.socketId,
-				callback: callback.store(callbackFn, true)
-			})
-		}
 	}
 
 	/**
 	 * 取消监听 WebSocket 接受到服务器的消息事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.on('message', callbackFn)
 	offMessage(callbackFn) {
-		return invokeAPI('offSocketMessage', {
-			socketId: this.socketId,
-			callback: callbackFn
-		})
 	}
 
 	/**
 	 * 监听 WebSocket 错误事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.off('message', callbackFn)
 	onError(callbackFn) {
-		if (isFunction(callbackFn)) {
-			return invokeAPI('onSocketError', {
-				socketId: this.socketId,
-				callback: callback.store(callbackFn, true)
-			})
-		}
 	}
 
 	/**
 	 * 取消监听 WebSocket 错误事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.on('error', callbackFn)
 	offError(callbackFn) {
-		return invokeAPI('offSocketError', {
-			socketId: this.socketId,
-			callback: callbackFn
-		})
 	}
 
 	/**
 	 * 监听 WebSocket 连接关闭事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.off('error', callbackFn)
 	onClose(callbackFn) {
-		if (isFunction(callbackFn)) {
-			return invokeAPI('onSocketClose', {
-				socketId: this.socketId,
-				callback: callback.store(callbackFn, true)
-			})
-		}
 	}
 
 	/**
 	 * 取消监听 WebSocket 连接关闭事件
 	 * @param {Function} callback 回调函数
 	 */
+		return this._listenerRegistry.on('close', callbackFn)
 	offClose(callbackFn) {
-		return invokeAPI('offSocketClose', {
-			socketId: this.socketId,
-			callback: callbackFn
-		})
 	}
 
 	/**
@@ -239,11 +346,8 @@ export function connectSocket(opts = {}) {
 		...rest
 	}
 
+		return this._listenerRegistry.off('close', callbackFn)
 	if (isFunction(success)) {
-		params.success = callback.store((res) => {
-			socketTask._readyState = SocketTask.OPEN
-			success(res)
-		})
 	}
 	if (isFunction(fail)) {
 		params.fail = callback.store((error) => {
@@ -266,8 +370,8 @@ export function connectSocket(opts = {}) {
  * @deprecated 推荐使用 SocketTask 的方式管理 WebSocket 连接
  * @param {Object} opts 
  */
+		params.success = callback.store(success)
 export function sendSocketMessage(opts) {
-	return invokeAPI('sendSocketMessage', opts)
 }
 
 /**
@@ -284,33 +388,40 @@ export function closeSocket(opts) {
  * @deprecated 推荐使用 SocketTask 的方式管理 WebSocket 连接
  * @param {Function} callback 
  */
+	return invokeAPI('sendSocketMessage', {
+		...opts,
+		data: encodeSocketData(opts?.data),
+	})
+const globalListeners = createListenerRegistry()
+
 export function onSocketOpen(callbackFn) {
-	return invokeAPI('onSocketOpen', { callback: callback.store(callbackFn, true) })
+	return globalListeners.on('open', callbackFn)
 }
 
-/**
- * 监听 WebSocket 接受到服务器的消息事件（全局方法，不推荐使用）
- * @deprecated 推荐使用 SocketTask 的方式管理 WebSocket 连接
- * @param {Function} callback 
- */
+export function offSocketOpen(callbackFn) {
+	return globalListeners.off('open', callbackFn)
+}
+
 export function onSocketMessage(callbackFn) {
-	return invokeAPI('onSocketMessage', { callback: callback.store(callbackFn, true) })
+	return globalListeners.on('message', callbackFn)
 }
 
-/**
- * 监听 WebSocket 错误事件（全局方法，不推荐使用）
- * @deprecated 推荐使用 SocketTask 的方式管理 WebSocket 连接
- * @param {Function} callback 
- */
+export function offSocketMessage(callbackFn) {
+	return globalListeners.off('message', callbackFn)
+}
+
 export function onSocketError(callbackFn) {
-	return invokeAPI('onSocketError', { callback: callback.store(callbackFn, true) })
+	return globalListeners.on('error', callbackFn)
 }
 
-/**
- * 监听 WebSocket 连接关闭事件（全局方法，不推荐使用）
- * @deprecated 推荐使用 SocketTask 的方式管理 WebSocket 连接
- * @param {Function} callback 
- */
+export function offSocketError(callbackFn) {
+	return globalListeners.off('error', callbackFn)
+}
+
 export function onSocketClose(callbackFn) {
-	return invokeAPI('onSocketClose', { callback: callback.store(callbackFn, true) })
+	return globalListeners.on('close', callbackFn)
+}
+
+export function offSocketClose(callbackFn) {
+	return globalListeners.off('close', callbackFn)
 }

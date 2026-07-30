@@ -73,12 +73,17 @@ dependencies {
     implementation (libs.ui.tooling)
     implementation(libs.zxing.android.embedded)
     testImplementation(libs.junit)
+    testImplementation(libs.mockwebserver)
     testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }
 
 android {
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     publishing {
         singleVariant("release") {
             withSourcesJar()
