@@ -113,14 +113,20 @@ modDefine('pages/index/index', function (require, module, exports) {
 Page / Component.setData()
   → service 严格解析 key 并深拷贝写入逻辑数据
   → behavior observer、组件 observer 按注册顺序执行
-  → service 生成不可变的 JSON 视图快照
+  → service 按 lexical binding owner 计算子组件 properties
+  → 子组件 observer 向下递归，property observer 按子树后序收尾
+  → service 为页面和所有受影响组件生成不可变的 JSON 视图快照
   → container 通过 publish 转发
-  → render 更新响应式状态
+  → render 只投影对应 generation 的响应式状态
   → Vue 计算并更新必要的 DOM
   → render 在 nextTick 后确认回调
 ```
 
-同一逻辑任务内的更新按模块批量传输，路径数组保留转义字段与数组下标的准确含义。数据 observer 引发的嵌套 `setData()` 会加入当前事务并继续按注册顺序排空；property observer 在数据 observer 阶段之后正序执行。初始化阶段的 `setData()` 回调会等到视图侧对应模块就绪后再刷新，避免业务回调早于真实渲染状态。
+同一逻辑任务内的更新按模块批量传输，根组件先于子组件进入批次，路径数组保留转义字段与数组下标的准确含义。数据 observer 引发的嵌套 `setData()` 会加入当前事务并继续按注册顺序排空；跨组件 property observer 在后代同步完成后再收尾。初始化阶段的 `setData()` 回调会等到视图侧确认对应批次后执行；组件销毁或页面卸载会确定性释放未确认回调。
+
+编译器为每个自定义组件使用位置生成 property binding descriptor，并逐项标记求值所有权。普通 data path、纯表达式，以及编译器能够携带模块记录的普通 WXS property 表达式由 service 求值；`wx:for` 的 `item/index` 等局部作用域保留 render 求值。WXS 模块在每个 lexical owner 的 service realm 内按 CommonJS 语义惰性加载并缓存；render 侧的 WXS 事件使用独立 realm 和缓存，两侧不共享闭包或 module-level 状态。所有权按 property 区分，同一组件可以同时包含两类绑定。service 接管的 property 不再接受 render props 回灌，避免双值源和 observer 双触发；render-owned property 仍通过兼容通道更新。该边界只依赖合法小程序的作用域语义，不识别或特化任何上层框架。
+
+组件的 binding owner 是声明该使用位置的 lexical WXML owner，与 mounted 后得到的 physical parent 分开保存，因此 slot 不会改变表达式求值作用域。每次 render 组件实例还会生成 opaque `generation`，贯穿 `mC`、`mA`、`mR`、`mU`、property 回流、初始快照和增量更新；同 `moduleId` 重建后，旧 generation 的迟到消息不会命中新实例。
 
 ### 3.2 用户事件
 

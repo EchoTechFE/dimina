@@ -31,8 +31,9 @@ sequenceDiagram
     S->>S: Page.onShow
 
     R->>R: 创建 Vue 页面与自定义组件
-    R->>S: mC：创建组件实例
-    S->>S: component created
+    R->>S: mC：generation + binding owner + descriptor
+    S->>S: 以 lexical owner 当前数据重算 properties
+    S->>S: component created / 初始 property observer
     R->>S: mA：组件节点已 mounted
     S->>S: component attached（父组件优先）
 
@@ -55,7 +56,7 @@ sequenceDiagram
 当前页面初始化分为两个阶段：
 
 1. service 先创建 Page 实例，依次完成页面的 `created`、`attached` 和 `onLoad`，再把初始数据交给 render。
-2. render 根据页面模板创建自定义组件；先注册该组件的初始数据监听，再通过 `mC` 请求 service 建立实例并执行 `created`。render 节点 mounted 后通过 `mA` 触发 `attached`，首轮视图更新完成后通过 `mR` 触发 `ready`。“先监听、后请求”保证 service 同步返回时不会丢失初始数据。
+2. render 根据页面模板创建自定义组件；先注册带 generation 的初始数据监听，再通过 `mC` 发送 lexical binding owner、编译期 property descriptor 和初始投影。service 会以 owner 的当前权威数据重算已接管 properties，再建立实例并执行 `created` 与初始 property observer。render 节点 mounted 后通过 `mA` 补充 physical parent 并触发 `attached`，首轮视图更新完成后通过 `mR` 触发 `ready`；`mR` 中的 descriptor 仅用于兼容旧编译产物。“先监听、后请求”保证 service 同步返回时不会丢失初始数据，generation 则保证同 ID 重建时不会消费旧响应。
 
 页面 `onReady` 使用就绪屏障：render 报告页面根节点挂载完成后，service 仍会等待已初始化组件全部 `ready`，再调用页面 `onReady`。这样可以避免页面测量早于组件真实挂载。
 

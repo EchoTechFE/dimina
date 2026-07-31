@@ -629,6 +629,9 @@ describe('syncUpdateChildrenProps', () => {
 		expect(child.tO).toHaveBeenCalledWith({
 			show: true,
 			name: 'fade',
+		}, {
+			source: 'service',
+			deferredPropertyChanges: {},
 		})
 	})
 

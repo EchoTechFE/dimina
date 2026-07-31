@@ -5,6 +5,7 @@ import hostEnv from './core/host-env'
 import loader from './core/loader'
 import message from './core/message'
 import runtime from './core/runtime'
+import { acknowledgeUpdateCallback } from './core/update-queue'
 
 const actionMap = { navigateBack, navigateTo, reLaunch, redirectTo, switchTab }
 
@@ -35,11 +36,11 @@ class Service {
 
 		// 来自 components/events.js
 		this.message.on('t', async (msg) => {
-			const { bridgeId, moduleId, methodName, event, success } = msg
+			const { bridgeId, moduleId, generation, methodName, event, success } = msg
 			if (methodName === undefined) {
 				return
 			}
-			const data = await runtime.triggerEvent({ bridgeId, moduleId, methodName, event })
+			const data = await runtime.triggerEvent({ bridgeId, moduleId, generation, methodName, event })
 			// 如果自定义事件有返回值，则将逻辑层执行结果透传给渲染层
 			if (data !== undefined) {
 				this.message.send({
@@ -56,7 +57,8 @@ class Service {
 		})
 
 		this.message.on('triggerCallback', (msg) => {
-			const { id, args } = msg
+			const { bridgeId, id, args } = msg
+			acknowledgeUpdateCallback(bridgeId, id)
 			callback.invoke(id, args)
 		})
 

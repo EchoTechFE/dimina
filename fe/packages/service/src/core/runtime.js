@@ -6,6 +6,9 @@ import { Page } from '../instance/page/page'
 import { PageModule } from '../instance/page/page-module'
 import loader from './loader'
 import router from './router'
+import { clearUpdateQueue, removeModuleUpdates } from './update-queue'
+import { evaluateServiceOwnedPropertyBindings } from './utils'
+import { createWxsRuntimeRealm } from './wxs-runtime'
 
 class Runtime {
 	constructor() {
@@ -122,7 +125,25 @@ class Runtime {
 	 * @param {*} opts
 	 */
 	createInstance(opts) {
-		const { bridgeId, moduleId, path, query, eventAttr, pageId, parentId, properties, propertyNames, targetInfo, stackId, isCustomTabBar = false, deferInitialData = false } = opts
+		const {
+			bridgeId,
+			moduleId,
+			path,
+			query,
+			eventAttr,
+			pageId,
+			parentId,
+			generation,
+			bindingOwnerId,
+			propBindings,
+			wxsModules,
+			properties,
+			propertyNames,
+			targetInfo,
+			stackId,
+			isCustomTabBar = false,
+			deferInitialData = false,
+		} = opts
 
 		const module = loader.getModuleByPath(path)
 		if (!module) {
@@ -135,6 +156,43 @@ class Runtime {
 		this.instances[bridgeId] = this.instances[bridgeId] || {}
 
 		if (module.type === ComponentModule.type) {
+			const existing = this.instances[bridgeId][moduleId]
+			if (existing) {
+				if (generation !== undefined && existing.__generation__ === generation) {
+					return existing
+				}
+				this.moduleUnmounted({
+					bridgeId,
+					moduleId,
+					generation: existing.__generation__,
+				})
+			}
+			const lexicalOwnerId = bindingOwnerId || pageId || parentId
+			const bindingOwner = this.instances[bridgeId][lexicalOwnerId]
+			if (bindingOwner && Array.isArray(wxsModules) && wxsModules.length > 0) {
+				if (!bindingOwner.__wxsRuntimeRealm__) {
+					try {
+						bindingOwner.__wxsRuntimeRealm__ = createWxsRuntimeRealm(wxsModules)
+					}
+					catch (error) {
+						console.warn('[service] failed to create WXS runtime realm:', error)
+						for (const descriptor of Object.values(propBindings || {})) {
+							if (descriptor?.wxsRoots?.length) {
+								descriptor.owner = 'render'
+							}
+						}
+					}
+				}
+			}
+			this.normalizeWxsBindingOwnership(propBindings, bindingOwner)
+			const authoritativeProperties = bindingOwner && propBindings
+				? evaluateServiceOwnedPropertyBindings(
+						propBindings,
+						bindingOwner.data,
+						Object.keys(module.moduleInfo.properties || {}),
+						bindingOwner.__wxsRuntimeRealm__,
+					)
+				: {}
 			const component = new Component(module, {
 				bridgeId,
 				moduleId,
@@ -144,11 +202,21 @@ class Runtime {
 				eventAttr,
 				pageId,
 				parentId,
-				properties,
+				generation,
+				bindingOwnerId: lexicalOwnerId,
+				propBindings,
+				properties: {
+					...properties,
+					...authoritativeProperties,
+				},
 				propertyNames,
 				targetInfo,
 			})
 			this.instances[bridgeId][moduleId] = component
+			this.registerPropertyBindings(component, {
+				bindingOwnerId,
+				propBindings,
+			})
 			if (!module.isComponent) {
 				router.push(component, stackId)
 			}
@@ -181,10 +249,80 @@ class Runtime {
 		}
 	}
 
+	registerPropertyBindings(instance, { bindingOwnerId, propBindings } = {}) {
+		if (!instance) {
+			return
+		}
+
+		const ownerId = bindingOwnerId
+			|| instance.__bindingOwnerId__
+			|| instance.__pageId__
+			|| instance.__parentId__
+		const bindings = propBindings || instance.__propBindings__
+		if (!ownerId || !bindings) {
+			return
+		}
+
+		const previousOwnerId = instance.__bindingOwnerId__
+		if (previousOwnerId && previousOwnerId !== ownerId) {
+			const previousOwner = this.instances[instance.bridgeId]?.[previousOwnerId]
+			delete previousOwner?.__childPropsBindings__?.[instance.__id__]
+		}
+
+		const owner = this.instances[instance.bridgeId]?.[ownerId]
+		this.normalizeWxsBindingOwnership(bindings, owner)
+		instance.__bindingOwnerId__ = ownerId
+		instance.__propBindings__ = bindings
+		instance.__serviceOwnedProps__ = new Set(
+			Object.entries(bindings)
+				.filter(([, descriptor]) => descriptor?.owner === 'service')
+				.map(([propName]) => propName),
+		)
+		instance.__pendingSyncedProps__ = {}
+
+		if (owner) {
+			owner.__childPropsBindings__ = owner.__childPropsBindings__ || {}
+			owner.__childPropsBindings__[instance.__id__] = bindings
+		}
+	}
+
+	normalizeWxsBindingOwnership(bindings, owner) {
+		if (owner?.__wxsRuntimeRealm__) {
+			return
+		}
+		for (const descriptor of Object.values(bindings || {})) {
+			if (descriptor?.wxsRoots?.length) {
+				descriptor.owner = 'render'
+			}
+		}
+	}
+
+	isCurrentGeneration(instance, generation) {
+		return generation === undefined || instance?.__generation__ === generation
+	}
+
+	unregisterPropertyBindings(instance) {
+		if (!instance) {
+			return
+		}
+		const owner = this.instances[instance.bridgeId]?.[instance.__bindingOwnerId__]
+		delete owner?.__childPropsBindings__?.[instance.__id__]
+		instance.__propBindings__ = null
+		instance.__serviceOwnedProps__?.clear()
+		instance.__pendingSyncedProps__ = {}
+		instance.__wxsRuntimeRealm__?.clear()
+		delete instance.__wxsRuntimeRealm__
+	}
+
 	moduleAttached(opts) {
-		const { bridgeId, moduleId, parentId } = opts
+		const { bridgeId, moduleId, parentId, generation } = opts
 		const instance = this.instances[bridgeId]?.[moduleId]
-		if (!instance || instance.__type__ !== ComponentModule.type || !instance.__isComponent__) {
+		if (
+			!instance
+			|| !this.isCurrentGeneration(instance, generation)
+			|| instance.__type__ !== ComponentModule.type
+			|| !instance.__isComponent__
+		) {
 			return
 		}
 		if (instance.__componentAttached__ || instance.__componentAttaching__) {
@@ -231,10 +369,10 @@ class Runtime {
 	}
 
 	moduleReady(opts) {
-		const { bridgeId, moduleId, propBindings, eventPath } = opts
+		const { bridgeId, moduleId, generation, bindingOwnerId, propBindings, eventPath } = opts
 		const instance = this.instances[bridgeId]?.[moduleId]
 
-		if (!instance) {
+		if (!instance || !this.isCurrentGeneration(instance, generation)) {
 			return
 		}
 
@@ -242,16 +380,13 @@ class Runtime {
 			instance.__eventPath__ = eventPath
 		}
 		
-		// 如果有属性绑定信息，注册到父组件
-		if (propBindings && instance.__parentId__) {
-			const parent = this.instances[bridgeId]?.[instance.__parentId__]
-			if (parent) {
-				if (!parent.__childPropsBindings__) {
-					parent.__childPropsBindings__ = {}
-				}
-				// 将编译器提供的绑定关系存储到父组件
-				parent.__childPropsBindings__[moduleId] = propBindings
-			}
+		// mR remains a compatibility fallback for older Render bundles. New
+		// bundles register the lexical binding owner together with mC.
+		if (propBindings) {
+			this.registerPropertyBindings(instance, {
+				bindingOwnerId: bindingOwnerId || instance.__bindingOwnerId__ || instance.__parentId__,
+				propBindings,
+			})
 		}
 
 		if (instance.__type__ === ComponentModule.type) {
@@ -309,10 +444,10 @@ class Runtime {
 	}
 
 	moduleUnmounted(opts) {
-		const { bridgeId, moduleId } = opts
+		const { bridgeId, moduleId, generation } = opts
 		const instance = this.instances[bridgeId]?.[moduleId]
 
-		if (!instance) {
+		if (!instance || !this.isCurrentGeneration(instance, generation)) {
 			return
 		}
 
@@ -322,6 +457,12 @@ class Runtime {
 				instance.__componentDetached__ = true
 			}
 		}
+		this.unregisterPropertyBindings(instance)
+		removeModuleUpdates(bridgeId, moduleId)
+		for (const pendingEvent of instance.__pendingRuntimeEvents__ || []) {
+			pendingEvent.resolve?.(undefined)
+		}
+		instance.__pendingRuntimeEvents__ = []
 		delete this.instances[bridgeId][moduleId]
 	}
 
@@ -508,6 +649,8 @@ class Runtime {
 		const instances = this.instances[bridgeId]
 
 		if (!instances) {
+			clearUpdateQueue(bridgeId)
+			this.pageStates.delete(bridgeId)
 			return
 		}
 
@@ -522,6 +665,11 @@ class Runtime {
 			}
 		})
 
+		for (const instance of Object.values(instances)) {
+			instance?.__wxsRuntimeRealm__?.clear()
+			delete instance?.__wxsRuntimeRealm__
+		}
+
 		instanceList.forEach((instance) => {
 			if (!instance) {
 				return
@@ -535,6 +683,7 @@ class Runtime {
 
 		router.remove(bridgeId)
 
+		clearUpdateQueue(bridgeId)
 		delete this.instances[bridgeId]
 		this.pageStates.delete(bridgeId)
 	}
@@ -672,7 +821,7 @@ class Runtime {
 	 * @param {*} opts
 	 */
 	async triggerEvent(opts) {
-		const { bridgeId, moduleId, methodName, event } = opts
+		const { bridgeId, moduleId, generation, methodName, event } = opts
 
 		if (methodName === undefined) {
 			return
@@ -685,7 +834,7 @@ class Runtime {
 		}
 
 		const instance = instances[moduleId]
-		if (!instance) {
+		if (!instance || !this.isCurrentGeneration(instance, generation)) {
 			console.warn(`[service] triggerEvent ${bridgeId} ${moduleId} ${methodName}, instance is not exist`)
 			return
 		}

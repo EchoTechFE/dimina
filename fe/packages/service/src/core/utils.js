@@ -557,27 +557,65 @@ function hasDependencyChanged(bindingInfo, changedData) {
  * @param {object} parentData 父组件的完整数据
  * @returns {*} 计算后的值
  */
-function evaluateExpression(bindingInfo, parentData) {
+function evaluateExpression(bindingInfo, parentData, wxsRealm) {
 	if (!bindingInfo || !bindingInfo.expression) {
 		return undefined
 	}
 	
-	if (bindingInfo.isSimple) {
+	if (bindingInfo.isSimple && !bindingInfo.wxsRoots?.length) {
 		// 简单绑定：直接获取值
 		return get(parentData, bindingInfo.expression)
 	}
 	
 	// 复杂表达式：创建一个安全的求值环境
 	try {
+		const wxsScope = Object.fromEntries(
+			(bindingInfo.wxsRoots || []).map(name => [name, wxsRealm.requireByName(name)]),
+		)
 		// 创建一个函数来安全地计算表达式
 		// 将父组件数据作为作用域
 		// eslint-disable-next-line no-new-func
-		const func = new Function('data', `with(data) { return ${bindingInfo.expression} }`)
-		return func(parentData)
+		const func = new Function(
+			'data',
+			'wxs',
+			`with(data) { with(wxs) { return ${bindingInfo.expression} } }`,
+		)
+		return func(parentData, wxsScope || {})
 	} catch (error) {
 		console.warn('[service] 计算表达式失败:', bindingInfo.expression, error)
 		return undefined
 	}
+}
+
+function isServiceOwnedBinding(bindingInfo, ownerData) {
+	if (bindingInfo?.owner === 'render') {
+		return false
+	}
+	if (bindingInfo?.owner === 'service') {
+		return true
+	}
+	if (!bindingInfo?.isSimple) {
+		return false
+	}
+
+	const dependencies = bindingInfo.dependencies || []
+	return dependencies.length > 0 && dependencies.every((dependency) => {
+		const root = dependency.split('.')[0]
+		return Object.prototype.hasOwnProperty.call(ownerData, root)
+	})
+}
+
+export function evaluateServiceOwnedPropertyBindings(bindings, ownerData, propertyNames, wxsRealm) {
+	const values = {}
+	const names = propertyNames || Object.keys(bindings || {})
+	for (const propName of names) {
+		const bindingInfo = bindings?.[propName]
+		if (!bindingInfo || !isServiceOwnedBinding(bindingInfo, ownerData)) {
+			continue
+		}
+		values[propName] = cloneDeep(evaluateExpression(bindingInfo, ownerData, wxsRealm))
+	}
+	return values
 }
 
 /**
@@ -588,26 +626,48 @@ function evaluateExpression(bindingInfo, parentData) {
  * @param {object} allInstances 所有组件实例对象（来自 runtime.instances[bridgeId]）
  * @param {object} changedData 父组件变化的数据（新值）
  */
-export function syncUpdateChildrenProps(parent, allInstances, changedData) {
+export function syncUpdateChildrenProps(parent, allInstances, changedData, visited = new Set()) {
 	const children = Object.values(allInstances || {})
 	const syncedChildren = []
+	const wxsRealm = parent.__wxsRuntimeRealm__
+
+	if (!parent?.__id__ || visited.has(parent.__id__)) {
+		return syncedChildren
+	}
+	visited.add(parent.__id__)
 	
-	// 遍历所有子组件
+	// Traverse declarations owned by this data scope. The lexical binding owner
+	// can differ from the physical component parent when slots are involved.
 	for (const child of children) {
-		// 只处理当前组件/页面的直接子组件
-		if (!isChildComponent(child, parent.__id__, children) || child.__parentId__ !== parent.__id__) {
+		const hasExplicitBindingOwner = Boolean(child?.__bindingOwnerId__)
+		const isOwnedBinding = hasExplicitBindingOwner
+			? child.__bindingOwnerId__ === parent.__id__
+			: isChildComponent(child, parent.__id__, children) && child.__parentId__ === parent.__id__
+		if (
+			!child?.__id__
+			|| visited.has(child.__id__)
+			|| !isOwnedBinding
+		) {
 			continue
 		}
 
 		// 检查子组件的每个 property 是否需要更新
 		const childProperties = child.__info__?.properties || {}
 		const updateData = {}
+		const serviceOwnedProps = []
+		const explicitBindings = child.__propBindings__
 		
 		// 使用编译器提供的绑定关系
 		for (const propName in childProperties) {
-			const bindingInfo = parent.__childPropsBindings__?.[child.__id__]?.[propName]
+			const bindingInfo = (
+				explicitBindings
+				|| parent.__childPropsBindings__?.[child.__id__]
+			)?.[propName]
 			
 			if (!bindingInfo) {
+				continue
+			}
+			if (explicitBindings && !isServiceOwnedBinding(bindingInfo, parent.data)) {
 				continue
 			}
 			
@@ -616,19 +676,41 @@ export function syncUpdateChildrenProps(parent, allInstances, changedData) {
 				// 重新计算表达式的值
 				// exparser deep-copies template expression results before assigning
 				// component properties, so parent and child never share an object.
-				const newValue = cloneDeep(evaluateExpression(bindingInfo, parent.data))
+				const newValue = cloneDeep(evaluateExpression(bindingInfo, parent.data, wxsRealm))
 				updateData[propName] = newValue
+				if (explicitBindings) {
+					serviceOwnedProps.push(propName)
+				}
 			}
 		}
 
 		// 如果有数据需要更新，直接触发子组件 observers，确保属性驱动的行为在 service 侧即时生效
 		if (Object.keys(updateData).length > 0) {
+			if (serviceOwnedProps.length > 0) {
+				child.__serviceOwnedProps__ = child.__serviceOwnedProps__ || new Set()
+				serviceOwnedProps.forEach(prop => child.__serviceOwnedProps__.add(prop))
+			}
 			const incomingData = child.normalizePropertyValues?.(updateData, { applyFilter: false }) || updateData
-			const appliedData = child.tO?.(incomingData)
+			const deferredPropertyChanges = {}
+			const appliedData = child.tO?.(incomingData, {
+				source: 'service',
+				deferredPropertyChanges,
+			})
 			const normalizedData = appliedData || child.normalizePropertyValues?.(incomingData) || incomingData
-			child.__pendingSyncedProps__ = child.__pendingSyncedProps__ || {}
-			Object.assign(child.__pendingSyncedProps__, incomingData)
+			if (!explicitBindings) {
+				child.__pendingSyncedProps__ = child.__pendingSyncedProps__ || {}
+				Object.assign(child.__pendingSyncedProps__, incomingData)
+			}
 			syncedChildren.push({ child, data: normalizedData })
+			syncedChildren.push(...syncUpdateChildrenProps(
+				child,
+				allInstances,
+				normalizedData,
+				visited,
+			))
+			if (deferredPropertyChanges.changes) {
+				invokePropertyChanges(child, deferredPropertyChanges.changes)
+			}
 		}
 	}
 

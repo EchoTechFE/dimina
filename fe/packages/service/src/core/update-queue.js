@@ -14,6 +14,8 @@ function getQueue(bridgeId) {
 			updates: [],
 			byModuleId: new Map(),
 			callbackIds: [],
+			callbackOwners: new Map(),
+			pendingCallbackIds: new Set(),
 		})
 	}
 
@@ -60,9 +62,10 @@ function snapshotUpdate(data, changes = []) {
 	}
 }
 
-export function enqueueUpdate(bridgeId, moduleId, data, callbackId, changes = []) {
+export function enqueueUpdate(bridgeId, moduleId, data, callbackId, changes = [], generation) {
 	const queue = getQueue(bridgeId)
-	const update = queue.byModuleId.get(moduleId)
+	const updateKey = generation === undefined ? moduleId : `${moduleId}:${generation}`
+	const update = queue.byModuleId.get(updateKey)
 	const snapshot = snapshotUpdate(data, changes)
 
 	if (update) {
@@ -71,12 +74,16 @@ export function enqueueUpdate(bridgeId, moduleId, data, callbackId, changes = []
 	}
 	else {
 		const nextUpdate = { moduleId, data: snapshot.data, changes: snapshot.changes }
-		queue.byModuleId.set(moduleId, nextUpdate)
+		if (generation !== undefined) {
+			nextUpdate.generation = generation
+		}
+		queue.byModuleId.set(updateKey, nextUpdate)
 		queue.updates.push(nextUpdate)
 	}
 
 	if (callbackId) {
 		queue.callbackIds.push(callbackId)
+		queue.callbackOwners.set(callbackId, moduleId)
 	}
 
 	if (queue.depth === 0 && !queue.scheduled) {
@@ -98,6 +105,7 @@ export function flushUpdates(bridgeId) {
 
 	const updates = queue.updates
 	const callbackIds = queue.callbackIds
+	callbackIds.forEach(id => queue.pendingCallbackIds.add(id))
 	queue.updates = []
 	queue.byModuleId = new Map()
 	queue.callbackIds = []
@@ -114,6 +122,61 @@ export function flushUpdates(bridgeId) {
 	})
 }
 
+export function acknowledgeUpdateCallback(bridgeId, callbackId) {
+	const queue = queues.get(bridgeId)
+	queue?.pendingCallbackIds.delete(callbackId)
+	queue?.callbackOwners.delete(callbackId)
+}
+
+export function removeModuleUpdates(bridgeId, moduleId) {
+	const queue = queues.get(bridgeId)
+	if (!queue) {
+		return
+	}
+
+	queue.updates = queue.updates.filter(update => update.moduleId !== moduleId)
+	queue.byModuleId = new Map(queue.updates.map((update) => {
+		const key = update.generation === undefined
+			? update.moduleId
+			: `${update.moduleId}:${update.generation}`
+		return [key, update]
+	}))
+
+	for (const [callbackId, ownerId] of queue.callbackOwners) {
+		if (ownerId !== moduleId) {
+			continue
+		}
+		callbackRegistry.remove(callbackId)
+		queue.callbackOwners.delete(callbackId)
+		queue.pendingCallbackIds.delete(callbackId)
+		queue.callbackIds = queue.callbackIds.filter(id => id !== callbackId)
+	}
+}
+
+export function clearUpdateQueue(bridgeId) {
+	const queue = queues.get(bridgeId)
+	if (!queue) {
+		return
+	}
+
+	for (const callbackId of queue.callbackOwners.keys()) {
+		callbackRegistry.remove(callbackId)
+	}
+	queues.delete(bridgeId)
+}
+
+export function getUpdateQueueStats(bridgeId) {
+	const queue = queues.get(bridgeId)
+	return {
+		queuedUpdates: queue?.updates.length || 0,
+		queuedCallbacks: queue?.callbackIds.length || 0,
+		pendingCallbacks: queue?.pendingCallbackIds.size || 0,
+	}
+}
+
 export function resetUpdateQueues() {
+	for (const bridgeId of queues.keys()) {
+		clearUpdateQueue(bridgeId)
+	}
 	queues.clear()
 }

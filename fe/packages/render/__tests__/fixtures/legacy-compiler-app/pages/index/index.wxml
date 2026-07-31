@@ -1,0 +1,14 @@
+<wxs module="fmt">
+module.exports.double = function (value) {
+	return value * 2
+}
+</wxs>
+<child-card
+	plain="{{count}}"
+	computed="{{count + offset}}"
+	wxs-value="{{fmt.double(count)}}"
+/>
+<block wx:for="{{items}}" wx:for-item="row" wx:for-index="idx" wx:key="*this">
+	<child-card loop-value="{{row.value}}" index="{{idx}}" />
+</block>
+<button id="update-values" bindtap="updateValues">update</button>

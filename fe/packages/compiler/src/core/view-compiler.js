@@ -15,6 +15,9 @@ import { getAppId, getComponent, getContentByPath, getDependencyGraph, getTarget
 import { parseBindings } from '../common/expression-parser.js'
 import { concatSourcemap, createLineSourcemap, mergeSourcemap, remapSourcemap } from './sourcemap.js'
 
+const PROP_BINDINGS_TRANSPORT_ATTRIBUTE = 'dimina-prop-bindings'
+const WXS_MODULES_TRANSPORT_ATTRIBUTE = 'dimina-wxs-modules'
+
 /**
  * 根据扩展名列表生成匹配尾部扩展名的正则，如 ['.wxs', '.qds'] -> /(\.wxs|\.qds)$/
  */
@@ -1099,6 +1102,16 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 					withEndIndices: true,
 				})
 
+				// 提取其中的 wxs 节点
+				const includeWxsStart = scriptModule.length
+				transTagWxs(
+					$includeContent,
+					scriptModule,
+					includePath,
+					path,
+				)
+				const includeWxsContext = createWxsContext(scriptModule.slice(includeWxsStart))
+
 				// 提取其中的 template 节点
 				transTagTemplate(
 					$includeContent,
@@ -1108,14 +1121,7 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 					componentPlaceholder,
 					{ path: includeDiagnosticSource, content: includeContent },
 					path,
-				)
-
-				// 提取其中的 wxs 节点
-				transTagWxs(
-					$includeContent,
-					scriptModule,
-					includePath,
-					path,
+					includeWxsContext,
 				)
 
 				// 处理被引入文件中的组件 wxs 依赖
@@ -1137,6 +1143,12 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 		}
 	})
 
+	// 处理 wxs 节点
+	// https://developers.weixin.qq.com/miniprogram/dev/reference/wxs/01wxs-module.html
+	const sourceWxsStart = scriptModule.length
+	transTagWxs($, scriptModule, sourcePath, path)
+	const sourceWxsContext = createWxsContext(scriptModule.slice(sourceWxsStart))
+
 	// 处理 template 节点
 	// https://developers.weixin.qq.com/miniprogram/dev/reference/wxml/template.html
 	transTagTemplate(
@@ -1147,11 +1159,8 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 		componentPlaceholder,
 		{ path: diagnosticSource, content: originalContent },
 		path,
+		sourceWxsContext,
 	)
-
-	// 处理 wxs 节点
-	// https://developers.weixin.qq.com/miniprogram/dev/reference/wxs/01wxs-module.html
-	transTagWxs($, scriptModule, sourcePath, path)
 
 	// 处理 import 节点
 	// https://developers.weixin.qq.com/miniprogram/dev/reference/wxml/import.html
@@ -1182,6 +1191,16 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 					withStartIndices: true,
 					withEndIndices: true,
 				})
+				// 提取其中的 wxs 节点
+				const importWxsStart = scriptModule.length
+				transTagWxs(
+					$$,
+					scriptModule,
+					importPath,
+					path,
+				)
+				const importWxsContext = createWxsContext(scriptModule.slice(importWxsStart))
+
 				// 提取其中的 template 节点
 				transTagTemplate(
 					$$,
@@ -1191,14 +1210,7 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 					componentPlaceholder,
 					{ path: importDiagnosticSource, content: importContent },
 					path,
-				)
-
-				// 提取其中的 wxs 节点
-				transTagWxs(
-					$$,
-					scriptModule,
-					importPath,
-					path,
+					importWxsContext,
 				)
 
 				// 处理被导入文件中的组件 wxs 依赖
@@ -1212,7 +1224,13 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 
 	const res = []
 
-	transHtmlTag($.html(), res, components, componentPlaceholder)
+	transHtmlTag(
+		$.html(),
+		res,
+		components,
+		componentPlaceholder,
+		createWxsContext(scriptModule),
+	)
 
 	return {
 		tpl: res.join(''),
@@ -1227,7 +1245,23 @@ function toCompileTemplate(isComponent, path, components, componentPlaceholder, 
 	}
 }
 
-function transTagTemplate($, templateModule, path, components, componentPlaceholder, sourceInfo, graphOwnerPath = path) {
+function createWxsContext(modules) {
+	return {
+		names: new Set(modules.map(module => module.originalName).filter(Boolean)),
+		modules,
+	}
+}
+
+function transTagTemplate(
+	$,
+	templateModule,
+	path,
+	components,
+	componentPlaceholder,
+	sourceInfo,
+	graphOwnerPath = path,
+	wxsContext = { names: new Set(), modules: [] },
+) {
 	const templateNodes = $('template[name]')
 	templateNodes.each((_, elem) => {
 		const name = $(elem).attr('name')
@@ -1238,7 +1272,13 @@ function transTagTemplate($, templateModule, path, components, componentPlacehol
 		templateContent.find(getViewScriptTags().join(',')).remove()
 		transAsses($, templateContent.find('image'), path, graphOwnerPath)
 		const res = []
-		transHtmlTag(templateContent.html(), res, components, componentPlaceholder)
+		transHtmlTag(
+			templateContent.html(),
+			res,
+			components,
+			componentPlaceholder,
+			wxsContext,
+		)
 
 		templateModule.push({
 			path: `tpl-${name}`,
@@ -1360,19 +1400,44 @@ function normalizeTemplateSyntax(html, components) {
 	return $.html()
 }
 
-function transHtmlTag(html, res, components, componentPlaceholder) {
+function transHtmlTag(
+	html,
+	res,
+	components,
+	componentPlaceholder,
+	wxsContext = { names: new Set(), modules: [] },
+) {
 	const attrsList = []
+	const bindingScopeStack = []
 	const parser = new htmlparser2.Parser(
 		{
 			onopentag(tag, attrs) {
+				const bindingScopeRoots = new Set(bindingScopeStack.at(-1) || [])
+				const hasFor = Object.keys(attrs).some(name => getTemplateDirectiveName(name) === 'for')
+				if (hasFor) {
+					const itemAttr = Object.keys(attrs).find(name => getTemplateDirectiveName(name) === 'for-item')
+					const indexAttr = Object.keys(attrs).find(name => getTemplateDirectiveName(name) === 'for-index')
+					bindingScopeRoots.add(itemAttr ? attrs[itemAttr] : 'item')
+					bindingScopeRoots.add(indexAttr ? attrs[indexAttr] : 'index')
+				}
+				bindingScopeStack.push(bindingScopeRoots)
 				attrsList.push(attrs)
-				res.push(transTag({ isStart: true, tag, attrs, components, componentPlaceholder }))
+				res.push(transTag({
+					isStart: true,
+					tag,
+					attrs,
+					components,
+					componentPlaceholder,
+					bindingScopeRoots,
+					wxsContext,
+				}))
 			},
 			ontext(text) {
 				res.push(transformTextInterpolation(text))
 			},
 			onclosetag(tag) {
 				res.push(transTag({ tag, attrs: attrsList.pop(), components }))
+				bindingScopeStack.pop()
 			},
 			onerror(error) {
 				console.error(error)
@@ -1390,7 +1455,7 @@ function transHtmlTag(html, res, components, componentPlaceholder) {
  * @param {*} opts
  */
 function transTag(opts) {
-	const { isStart, tag, attrs, components } = opts
+	const { isStart, tag, attrs, components, bindingScopeRoots, wxsContext } = opts
 	let res
 	if (tag === DIMINA_SLOT_GROUP_TAG) {
 		if (isStart) {
@@ -1423,7 +1488,9 @@ function transTag(opts) {
 	}
 
 	let tagRes
-	const propsAry = isStart ? getProps(attrs, tag, components) : []
+	const propsAry = isStart
+		? getProps(attrs, tag, components, bindingScopeRoots, wxsContext)
+		: []
 	// 多 slot 支持，目前在组件定义时的选项中 multipleSlots 未生效
 	const multipleSlots = attrs?.slot
 	if (attrs?.slot) {
@@ -1502,7 +1569,13 @@ function generateSlotDirective(slotValue) {
  * @param {*} tag
  * @param {*} components - 组件映射，用于判断是否为自定义组件
  */
-function getProps(attrs, tag, components) {
+function getProps(
+	attrs,
+	tag,
+	components,
+	bindingScopeRoots = new Set(),
+	wxsContext = { names: new Set(), modules: [] },
+) {
 	const attrsList = []
 	const isCustomComponent = Boolean(components && components[tag])
 	// 用于记录属性绑定关系：{ 子组件属性名: 父组件数据路径 }
@@ -1666,7 +1739,7 @@ function getProps(attrs, tag, components) {
 				: parseSafeBraceExp(value)
 
 			// 如果是自定义组件的属性绑定，记录绑定关系
-			if (isCustomComponent) {
+			if (isCustomComponent && !name.startsWith('change:')) {
 				// 记录：子组件属性名 -> 父组件数据表达式
 				// 例如：count2="{{count}}" => propBindings['count2'] = 'count'
 				//       value="{{item.name}}" => propBindings['value'] = 'item.name'
@@ -1722,10 +1795,35 @@ function getProps(attrs, tag, components) {
 		if (Object.keys(validBindings).length > 0) {
 			// 解析表达式，生成包含依赖信息的绑定对象
 			const parsedBindings = parseBindings(validBindings)
+			let needsWxsTransport = false
+			for (const descriptor of Object.values(parsedBindings)) {
+				const hasLocalScope = descriptor.dependencies.some((dependency) => {
+					const root = dependency.split('.')[0]
+					return bindingScopeRoots.has(root)
+				})
+				const wxsRoots = descriptor.dependencies
+					.map(dependency => dependency.split('.')[0])
+					.filter(root => wxsContext.names.has(root))
+				const hasUnavailableWxs = wxsRoots.length > 0 && wxsContext.modules.length === 0
+				descriptor.owner = hasLocalScope || hasUnavailableWxs ? 'render' : 'service'
+				if (descriptor.owner === 'service' && wxsRoots.length > 0) {
+					descriptor.wxsRoots = [...new Set(wxsRoots)]
+					needsWxsTransport = true
+				}
+			}
 			// 使用动态绑定 + HTML 实体转义，Vue 会自动解码并解析为对象
 			const bindingsJson = JSON.stringify(parsedBindings)
 			const escapedJson = bindingsJson.replace(/"/g, '&quot;')
+			// Keep the mounted directive for already-released render runtimes, while
+			// also making the descriptor a declared component prop so a new runtime
+			// can include it in mC before the component has mounted.
+			propsRes.push(`:${PROP_BINDINGS_TRANSPORT_ATTRIBUTE}="${escapedJson}"`)
 			propsRes.push(`v-c-prop-bindings="${escapedJson}"`)
+			if (needsWxsTransport) {
+				const encodedWxsModules = encodeURIComponent(JSON.stringify(wxsContext.modules))
+				const encodedWxsModulesLiteral = JSON.stringify(encodedWxsModules).replace(/"/g, '&quot;')
+				propsRes.push(`:${WXS_MODULES_TRANSPORT_ATTRIBUTE}="${encodedWxsModulesLiteral}"`)
+			}
 		}
 		} catch (error) {
 			console.warn('[compiler] 序列化 propBindings 失败:', error.message, '标签:', tag, '绑定数据:', propBindings)

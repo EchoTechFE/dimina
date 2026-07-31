@@ -64,7 +64,14 @@ export class Page {
 
 		const callbacks = this.__pendingInitSetDataCallbacks__
 		this.__pendingInitSetDataCallbacks__ = []
-		enqueueUpdate(this.bridgeId, this.__id__, {}, createUpdateCallback(this, callbacks))
+		enqueueUpdate(
+			this.bridgeId,
+			this.__id__,
+			{},
+			createUpdateCallback(this, callbacks),
+			[],
+			this.__generation__,
+		)
 	}
 
 	setData(data, callback) {
@@ -78,19 +85,21 @@ export class Page {
 			return
 		}
 
-		// 同步更新子组件的 properties，确保与微信小程序时序一致
-		const syncedChildren = syncUpdateChildrenProps(this, runtime.instances[this.bridgeId], update.changedData)
-
 		enqueueUpdate(
 			this.bridgeId,
 			this.__id__,
 			update.changedData,
 			createUpdateCallback(this, update.callbacks),
 			update.changes,
+			this.__generation__,
 		)
 
+		// Root-first insertion keeps a nested child setData in the same tree transaction
+		// without allowing its Render patch to overtake the originating parent patch.
+		const syncedChildren = syncUpdateChildrenProps(this, runtime.instances[this.bridgeId], update.changedData)
+
 		syncedChildren.forEach(({ child, data }) => {
-			enqueueUpdate(this.bridgeId, child.__id__, data)
+			enqueueUpdate(this.bridgeId, child.__id__, data, undefined, [], child.__generation__)
 		})
 	}
 

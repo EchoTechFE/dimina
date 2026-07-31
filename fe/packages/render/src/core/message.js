@@ -51,17 +51,44 @@ class Message {
 		this.event.off(type, callback)
 	}
 
-	wait(eventName) {
+	listenerCount(eventName) {
+		return this.event.all.get(eventName)?.length || 0
+	}
+
+	wait(eventName, { generation, signal } = {}) {
 		return new Promise((resolve) => {
-			this.on(eventName, (msg) => {
-				resolve(msg.data)
-				this.off(eventName)
-			})
+			let settled = false
+			const finish = (value) => {
+				if (settled) {
+					return
+				}
+				settled = true
+				this.off(eventName, handleMessage)
+				signal?.removeEventListener('abort', handleAbort)
+				resolve(value)
+			}
+			const handleMessage = (msg) => {
+				// A generation-less response comes from an older Service runtime and
+				// remains compatible. Once Service supplies a generation, stale
+				// responses for a reused module id no longer resolve this setup.
+				if (generation != null && msg.generation != null && msg.generation !== generation) {
+					return
+				}
+				finish(msg.data)
+			}
+			const handleAbort = () => finish(undefined)
+
+			if (signal?.aborted) {
+				finish(undefined)
+				return
+			}
+			this.on(eventName, handleMessage)
+			signal?.addEventListener('abort', handleAbort, { once: true })
 		})
 	}
 
-	waitAndSend(eventName, msg) {
-		const response = this.wait(eventName)
+	waitAndSend(eventName, msg, options) {
+		const response = this.wait(eventName, options)
 		this.send(msg)
 		return response
 	}

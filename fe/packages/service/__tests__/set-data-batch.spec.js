@@ -127,7 +127,10 @@ describe('setData update batching', () => {
 				],
 			},
 		})
-		expect(child.tO).toHaveBeenCalledWith({ count: 1 })
+		expect(child.tO).toHaveBeenCalledWith({ count: 1 }, {
+			source: 'service',
+			deferredPropertyChanges: {},
+		})
 		expect(child.__pendingSyncedProps__).toEqual({ count: 1 })
 	})
 

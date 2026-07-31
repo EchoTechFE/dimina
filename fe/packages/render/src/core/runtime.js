@@ -1,5 +1,11 @@
 import { deepEqual, getDataAttributes, normalizePropertyValues as normalizeMiniProgramPropertyValues, set, uuid } from '@dimina/common'
-import { Components, deepToRaw, triggerEvent } from '@dimina/components'
+import {
+	Components,
+	deepToRaw,
+	PROP_BINDINGS_TRANSPORT_PROP,
+	triggerEvent,
+	WXS_MODULES_TRANSPORT_PROP,
+} from '@dimina/components'
 import {
 	createApp,
 	createBlock,
@@ -17,6 +23,7 @@ import {
 	normalizeClass,
 	normalizeStyle,
 	onMounted,
+	onScopeDispose,
 	onUnmounted,
 	openBlock,
 	provide,
@@ -543,6 +550,9 @@ class Runtime {
 		this.app = null
 		this.pageId = null
 		this.instance = new Map()
+		this.moduleGenerations = new Map()
+		this.moduleGenerationSequence = 0
+		this.moduleSetupWaits = new Map()
 		this.moduleIds = new WeakMap()
 		this.moduleRootIds = new WeakMap()
 		this.setupData = new Map()
@@ -824,7 +834,11 @@ class Runtime {
 		}
 	}
 
-	applyInitialData(moduleId, data, initData) {
+	applyInitialData(moduleId, data, initData, generation) {
+		if (!this.isCurrentModuleGeneration(moduleId, generation)) {
+			return
+		}
+
 		const entries = Object.entries(initData)
 		for (let i = 0; i < entries.length; i++) {
 			const [key, value] = entries[i]
@@ -871,24 +885,82 @@ class Runtime {
 		internal.update?.()
 	}
 
-	setModuleInstance(moduleId, instance) {
+	isCurrentModuleGeneration(moduleId, generation) {
+		// Updates from older Service runtimes did not carry a generation.
+		return generation == null || this.moduleGenerations.get(moduleId) === generation
+	}
+
+	createModuleGeneration() {
+		this.moduleGenerationSequence++
+		return `${this.moduleGenerationSequence.toString(36)}_${uuid()}`
+	}
+
+	registerModuleSetupWait(moduleId, generation, controller) {
+		const previous = this.moduleSetupWaits.get(moduleId)
+		if (previous && previous.controller !== controller) {
+			previous.controller.abort()
+		}
+		this.moduleSetupWaits.set(moduleId, { controller, generation })
+		return controller
+	}
+
+	cancelModuleSetupWait(moduleId, generation) {
+		const pending = this.moduleSetupWaits.get(moduleId)
+		if (!pending || (generation != null && pending.generation !== generation)) {
+			return false
+		}
+		this.moduleSetupWaits.delete(moduleId)
+		pending.controller.abort()
+		return true
+	}
+
+	clearModuleSetupWait(moduleId, generation) {
+		const pending = this.moduleSetupWaits.get(moduleId)
+		if (!pending || (generation != null && pending.generation !== generation)) {
+			return false
+		}
+		this.moduleSetupWaits.delete(moduleId)
+		return true
+	}
+
+	setModuleInstance(moduleId, instance, generation) {
 		if (!instance) {
-			return
+			return false
+		}
+		const previousGeneration = this.moduleGenerations.get(moduleId)
+		if (previousGeneration != null && previousGeneration !== generation) {
+			this.cancelModuleSetupWait(moduleId, previousGeneration)
+		}
+		const previousInstance = this.instance.get(moduleId)
+		if (previousInstance && previousInstance !== instance) {
+			this.moduleIds.delete(previousInstance)
 		}
 		this.instance.set(moduleId, instance)
 		this.moduleIds.set(instance, moduleId)
+		if (generation == null) {
+			this.moduleGenerations.delete(moduleId)
+		}
+		else {
+			this.moduleGenerations.set(moduleId, generation)
+		}
 		if (this._instanceWaiters.has(moduleId)) {
 			this._instanceWaiters.get(moduleId).forEach(resolve => resolve(instance))
 			this._instanceWaiters.delete(moduleId)
 		}
+		return true
 	}
 
-	deleteModuleInstance(moduleId) {
+	deleteModuleInstance(moduleId, generation) {
+		if (!this.isCurrentModuleGeneration(moduleId, generation)) {
+			return false
+		}
 		const instance = this.instance.get(moduleId)
 		if (instance) {
 			this.moduleIds.delete(instance)
 		}
 		this.instance.delete(moduleId)
+		this.moduleGenerations.delete(moduleId)
+		return true
 	}
 
 	registerModuleRoots(moduleId, roots) {
@@ -1026,6 +1098,8 @@ class Runtime {
 				props: {
 					...module.props,
 					[WXML_STYLE_PROP]: { type: null },
+					[PROP_BINDINGS_TRANSPORT_PROP]: { type: null },
+					[WXS_MODULES_TRANSPORT_PROP]: { type: null },
 				},
 				async setup(props, { attrs, expose }) {
 					const parentInfo = inject('info')
@@ -1050,6 +1124,7 @@ class Runtime {
 					const pageId = pageInfo?.id || parentId
 					const pagePath = pageInfo ? path : parentPath
 					const moduleId = `${id}_${uuid()}`
+					const generation = that.createModuleGeneration()
 					provide('info', {
 						id: moduleId,
 						sId,
@@ -1061,7 +1136,12 @@ class Runtime {
 						pageId,
 					})
 					const instance = vueInstance.proxy
-					that.setModuleInstance(moduleId, instance)
+					that.setModuleInstance(moduleId, instance, generation)
+					const setupWaitController = that.registerModuleSetupWait(
+						moduleId,
+						generation,
+						new AbortController(),
+					)
 					const normalizeCurrentProperties = () => normalizeMiniProgramPropertyValues(
 						module.propertySchemas,
 						normalizeStaticBooleanAttributes(
@@ -1094,6 +1174,11 @@ class Runtime {
 						hasVNodeProp(vueInstance.vnode.props, name)
 						|| (name === 'style' && hasVNodeProp(vueInstance.vnode.props, WXML_STYLE_PROP))
 					))
+					const createTimePropBindings = deepToRaw(props[PROP_BINDINGS_TRANSPORT_PROP]) || null
+					const rawWxsModules = deepToRaw(props[WXS_MODULES_TRANSPORT_PROP])
+					const createTimeWxsModules = typeof rawWxsModules === 'string'
+						? JSON.parse(decodeURIComponent(rawWxsModules))
+						: rawWxsModules || null
 
 					// Service lifecycle dispatch is synchronous. Register the one-shot data
 					// listener before mC so a same-stack response cannot be lost.
@@ -1115,8 +1200,18 @@ class Runtime {
 							},
 							properties: initialProperties,
 							propertyNames,
-							propBindings: null, // 初始化时为 null，稍后从 DOM 元素读取
+							// The compiler transports the descriptor as an internal component
+							// prop, so Service can register it before mounted/mR. pageId is the
+							// lexical WXML owner; parentId remains the structural parent known
+							// at create time and may be corrected by mA after mount.
+							propBindings: createTimePropBindings,
+							wxsModules: createTimeWxsModules,
+							bindingOwnerId: pageId,
+							generation,
 						},
+					}, {
+						generation,
+						signal: setupWaitController.signal,
 					})
 
 					// Track the component until its initial data has returned from service.
@@ -1130,6 +1225,36 @@ class Runtime {
 						_resolvePending?.()
 					}
 					that._pendingSetups.set(moduleId, new Promise(r => (_resolvePending = r)))
+					let moduleUnmountMessageSent = false
+					const sendModuleUnmount = () => {
+						if (moduleUnmountMessageSent) {
+							return
+						}
+						moduleUnmountMessageSent = true
+						message.send({
+							type: 'mU',
+							target: 'service',
+							body: {
+								bridgeId,
+								moduleId,
+								generation,
+							},
+						})
+					}
+					const cleanupModuleState = () => {
+						const removedCurrentInstance = that.deleteModuleInstance(moduleId, generation)
+						if (removedCurrentInstance) {
+							that.setupData.delete(moduleId)
+							that.initializedModules.delete(moduleId)
+							that.preInitUpdates.delete(moduleId)
+							that._pendingSetups.delete(moduleId)
+						}
+						_pendingResolve()
+					}
+					onScopeDispose(() => {
+						that.cancelModuleSetupWait(moduleId, generation)
+						cleanupModuleState()
+					})
 
 					onMounted(() => {
 						const roots = collectVNodeRootElements(vueInstance.subTree)
@@ -1150,6 +1275,7 @@ class Runtime {
 								body: {
 									bridgeId,
 									moduleId,
+									generation,
 									parentId: renderParentId || parentId,
 								},
 							})
@@ -1163,6 +1289,7 @@ class Runtime {
 								body: {
 									bridgeId,
 									moduleId,
+									generation,
 									propBindings, // 传递从指令中读取的绑定信息
 									eventPath,
 								},
@@ -1188,20 +1315,8 @@ class Runtime {
 						unregisterFormControl?.()
 						const roots = collectVNodeRootElements(vueInstance.subTree)
 						that.unregisterModuleRoots(moduleId, roots)
-						message.send({
-							type: 'mU',
-							target: 'service',
-							body: {
-								bridgeId,
-								moduleId,
-							},
-						})
-						that.deleteModuleInstance(moduleId)
-						that.setupData.delete(moduleId)
-						that.initializedModules.delete(moduleId)
-						that.preInitUpdates.delete(moduleId)
-						that._pendingSetups.delete(moduleId)
-						_pendingResolve()
+						sendModuleUnmount()
+						cleanupModuleState()
 					})
 
 					const { data, templateData } = createTemplateData()
@@ -1245,6 +1360,7 @@ class Runtime {
 								body: {
 									bridgeId,
 									moduleId,
+									generation,
 									methodName: 'tO', // triggerObserver
 									event: changedProps,
 								},
@@ -1256,9 +1372,12 @@ class Runtime {
 					)
 
 					const initData = await initDataPromise
-					that._pendingSetups.delete(moduleId)
+					that.clearModuleSetupWait(moduleId, generation)
 					_pendingResolve()
-					that.applyInitialData(moduleId, data, initData)
+					if (that.isCurrentModuleGeneration(moduleId, generation)) {
+						that._pendingSetups.delete(moduleId)
+						that.applyInitialData(moduleId, data, initData, generation)
+					}
 					return templateData
 				},
 				render(...args) {
@@ -1279,7 +1398,10 @@ class Runtime {
 	}
 
 	updateModule(opts) {
-		const { moduleId, data, changes = [] } = opts
+		const { moduleId, generation, data, changes = [] } = opts
+		if (!this.isCurrentModuleGeneration(moduleId, generation)) {
+			return false
+		}
 		const setupData = this.setupData.get(moduleId)
 
 		if (setupData) {
@@ -1312,9 +1434,11 @@ class Runtime {
 			if (hasNewReactiveKey) {
 				this.refreshProxyAccess(moduleId, newKeys)
 			}
+			return true
 		}
 		else {
 			console.warn('[system]', '[render]', `module ${moduleId} is not exist.`)
+			return false
 		}
 	}
 

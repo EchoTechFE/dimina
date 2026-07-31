@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { JSDOM } from 'jsdom'
-import { createApp, h, nextTick, provide, resolveComponent, resolveDirective, Suspense, withDirectives } from 'vue'
+import { createApp, defineComponent, h, nextTick, provide, ref, resolveComponent, resolveDirective, Suspense, withDirectives } from 'vue'
 import { createMiniProgramSlots } from '../src/core/slots'
 
 const groupA = [
@@ -30,7 +30,11 @@ describe('runtime template components', () => {
 		globalThis.HTMLElement = dom.window.HTMLElement
 		globalThis.SVGElement = dom.window.SVGElement
 		globalThis.MutationObserver = dom.window.MutationObserver
-		globalThis.navigator = dom.window.navigator
+		Object.defineProperty(globalThis, 'navigator', {
+			value: dom.window.navigator,
+			configurable: true,
+			writable: true,
+		})
 		globalThis.requestAnimationFrame = dom.window.requestAnimationFrame ?? (cb => setTimeout(cb, 0))
 		globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame ?? (id => clearTimeout(id))
 
@@ -204,6 +208,358 @@ describe('runtime template components', () => {
 		expect(createdMessage.propertyNames).toContain('style')
 
 		app.unmount()
+	})
+
+	it('sends compile-time property bindings and their lexical owner in mC', async () => {
+		const loader = (await import('../src/core/loader.js')).default
+		const message = (await import('../src/core/message.js')).default
+		const descriptor = {
+			count: {
+				expression: 'count',
+				dependencies: ['count'],
+				isSimple: true,
+			},
+		}
+		const wxsModules = [{
+			path: 'format',
+			originalName: 'format',
+			code: 'module.exports = {}',
+		}]
+		let createdMessage
+		window.DiminaRenderBridge = {
+			publish: vi.fn((payload) => {
+				const sent = JSON.parse(payload)
+				if (sent.type !== 'mC') return
+				createdMessage = sent.body
+				window.DiminaRenderBridge.onMessage({
+					type: sent.body.moduleId,
+					body: { data: {} },
+				})
+			}),
+		}
+		message.init()
+
+		vi.spyOn(loader, 'getModuleByPath').mockReturnValue({
+			moduleInfo: {
+				id: 'binding-child',
+				usingComponents: {},
+				render() {
+					return h('div', 'child')
+				},
+			},
+			propertySchemas: {},
+			props: {},
+		})
+
+		const BindingChild = runtime.createComponent('/pages/owner/index', 'bridge-binding', {
+			child: '/components/binding-child',
+		})['dd-child']
+		const app = createApp({
+			setup() {
+				provide('info', { id: 'page-owner', sId: 'page-scope' })
+				provide('path', '/pages/owner/index')
+				provide('/pages/owner/index', { id: 'page-owner' })
+				return () => h(Suspense, null, {
+					default: () => h(BindingChild, {
+						'dimina-prop-bindings': descriptor,
+						'dimina-wxs-modules': encodeURIComponent(JSON.stringify(wxsModules)),
+					}),
+				})
+			},
+		})
+		const root = document.createElement('div')
+		document.body.append(root)
+		app.mount(root)
+
+		await vi.waitFor(() => expect(root.textContent).toBe('child'))
+		expect(createdMessage).toMatchObject({
+			parentId: 'page-owner',
+			bindingOwnerId: 'page-owner',
+			propBindings: descriptor,
+			wxsModules,
+		})
+
+		app.unmount()
+	})
+
+	it('keeps a slotted binding lexical owner separate from its physical parent in mC', async () => {
+		const loader = (await import('../src/core/loader.js')).default
+		const message = (await import('../src/core/message.js')).default
+		const descriptor = {
+			value: {
+				expression: 'slotValue',
+				dependencies: ['slotValue'],
+				isSimple: true,
+			},
+		}
+		let createdMessage
+		window.DiminaRenderBridge = {
+			publish: vi.fn((payload) => {
+				const sent = JSON.parse(payload)
+				if (sent.type !== 'mC') return
+				createdMessage = sent.body
+				window.DiminaRenderBridge.onMessage({
+					type: sent.body.moduleId,
+					body: { data: {} },
+				})
+			}),
+		}
+		message.init()
+
+		vi.spyOn(loader, 'getModuleByPath').mockReturnValue({
+			moduleInfo: {
+				id: 'slotted-binding-child',
+				usingComponents: {},
+				render() {
+					return h('div', 'slotted child')
+				},
+			},
+			propertySchemas: {},
+			props: {},
+		})
+
+		const BindingChild = runtime.createComponent('/pages/lexical/index', 'bridge-slot-binding', {
+			child: '/components/slotted-binding-child',
+		})['dd-child']
+		const SlotHost = defineComponent({
+			setup(_, { slots }) {
+				provide('info', { id: 'physical-parent', sId: 'physical-scope' })
+				provide('path', '/components/slot-host')
+				return () => h('section', slots.default?.())
+			},
+		})
+		const app = createApp({
+			setup() {
+				provide('info', { id: 'lexical-owner', sId: 'lexical-scope' })
+				provide('path', '/pages/lexical/index')
+				provide('/pages/lexical/index', { id: 'lexical-owner' })
+				return () => h(SlotHost, null, {
+					default: () => h(Suspense, null, {
+						default: () => h(BindingChild, {
+							'dimina-prop-bindings': descriptor,
+						}),
+					}),
+				})
+			},
+		})
+		const root = document.createElement('div')
+		document.body.append(root)
+		app.mount(root)
+
+		await vi.waitFor(() => expect(root.textContent).toBe('slotted child'))
+		expect(createdMessage).toMatchObject({
+			parentId: 'physical-parent',
+			bindingOwnerId: 'lexical-owner',
+			propBindings: descriptor,
+		})
+
+		app.unmount()
+	})
+
+	it('keeps the mounted directive descriptor as an mR fallback for legacy compiler output', async () => {
+		const loader = (await import('../src/core/loader.js')).default
+		const message = (await import('../src/core/message.js')).default
+		const descriptor = {
+			value: {
+				expression: 'legacyValue',
+				dependencies: ['legacyValue'],
+				isSimple: true,
+			},
+		}
+		let createdMessage
+		let readyMessage
+		window.DiminaRenderBridge = {
+			publish: vi.fn((payload) => {
+				const sent = JSON.parse(payload)
+				if (sent.type === 'mC') {
+					createdMessage = sent.body
+					window.DiminaRenderBridge.onMessage({
+						type: sent.body.moduleId,
+						body: { data: {} },
+					})
+				}
+				else if (sent.type === 'mR') {
+					readyMessage = sent.body
+				}
+			}),
+		}
+		message.init()
+
+		vi.spyOn(loader, 'getModuleByPath').mockReturnValue({
+			moduleInfo: {
+				id: 'legacy-binding-child',
+				usingComponents: {},
+				render() {
+					return h('div', 'legacy child')
+				},
+			},
+			propertySchemas: {},
+			props: {},
+		})
+
+		const BindingChild = runtime.createComponent('/pages/legacy/index', 'bridge-legacy-binding', {
+			child: '/components/legacy-binding-child',
+		})['dd-child']
+		const legacyBindingsDirective = {
+			mounted(el, binding) {
+				el._propBindings = binding.value
+			},
+		}
+		const app = createApp({
+			setup() {
+				provide('info', { id: 'legacy-owner', sId: 'legacy-scope' })
+				provide('path', '/pages/legacy/index')
+				provide('/pages/legacy/index', { id: 'legacy-owner' })
+				return () => h(Suspense, null, {
+					default: () => withDirectives(h(BindingChild), [
+						[legacyBindingsDirective, descriptor],
+					]),
+				})
+			},
+		})
+		const root = document.createElement('div')
+		document.body.append(root)
+		app.mount(root)
+
+		await vi.waitFor(() => expect(readyMessage).toBeDefined())
+		expect(createdMessage.propBindings).toBeNull()
+		expect(readyMessage.propBindings).toEqual(descriptor)
+
+		app.unmount()
+	})
+
+	it('uses one stable generation for every lifecycle and property replay message from a component setup', async () => {
+		const loader = (await import('../src/core/loader.js')).default
+		const message = (await import('../src/core/message.js')).default
+		const sentMessages = []
+		window.DiminaRenderBridge = {
+			publish: vi.fn((payload) => {
+				const sent = JSON.parse(payload)
+				sentMessages.push(sent)
+				if (sent.type === 'mC') {
+					window.DiminaRenderBridge.onMessage({
+						type: sent.body.moduleId,
+						body: { data: { value: sent.body.properties.value } },
+					})
+				}
+			}),
+		}
+		message.init()
+
+		vi.spyOn(loader, 'getModuleByPath').mockReturnValue({
+			moduleInfo: {
+				id: 'generation-child',
+				usingComponents: {},
+				render() {
+					return h('div', this.value)
+				},
+			},
+			propertySchemas: {
+				value: { type: String, optionalTypes: [], value: '' },
+			},
+			props: {
+				value: { type: null },
+			},
+		})
+
+		const GenerationChild = runtime.createComponent('/pages/generation/index', 'bridge-generation', {
+			child: '/components/generation-child',
+		})['dd-child']
+		const value = ref('first')
+		const app = createApp({
+			setup() {
+				provide('info', { id: 'generation-owner', sId: 'generation-scope' })
+				provide('path', '/pages/generation/index')
+				provide('/pages/generation/index', { id: 'generation-owner' })
+				return () => h(Suspense, null, {
+					default: () => h(GenerationChild, { value: value.value }),
+				})
+			},
+		})
+		const root = document.createElement('div')
+		document.body.append(root)
+		app.mount(root)
+
+		await vi.waitFor(() => expect(sentMessages.some(message => message.type === 'mR')).toBe(true))
+		value.value = 'second'
+		await vi.waitFor(() => expect(sentMessages.some(message => message.type === 't')).toBe(true))
+		app.unmount()
+
+		const componentMessages = sentMessages.filter(message => ['mC', 'mA', 'mR', 'mU', 't'].includes(message.type))
+		expect(componentMessages.map(message => message.type)).toEqual(['mC', 'mA', 'mR', 't', 'mU'])
+		const generations = componentMessages.map(message => message.body.generation)
+		expect(generations[0]).toEqual(expect.any(String))
+		expect(generations[0]).not.toBe('')
+		expect(new Set(generations)).toEqual(new Set([generations[0]]))
+	})
+
+	it('cancels an unanswered mC listener when a pending component setup is unmounted', async () => {
+		const loader = (await import('../src/core/loader.js')).default
+		const message = (await import('../src/core/message.js')).default
+		let createdMessage
+		const sentMessages = []
+		window.DiminaRenderBridge = {
+			publish: vi.fn((payload) => {
+				const sent = JSON.parse(payload)
+				sentMessages.push(sent)
+				if (sent.type === 'mC') {
+					createdMessage = sent.body
+				}
+			}),
+		}
+		message.init()
+
+		vi.spyOn(loader, 'getModuleByPath').mockReturnValue({
+			moduleInfo: {
+				id: 'unanswered-child',
+				usingComponents: {},
+				render() {
+					return h('div', this.lateValue)
+				},
+			},
+			propertySchemas: {},
+			props: {},
+		})
+
+		const UnansweredChild = runtime.createComponent('/pages/unanswered/index', 'bridge-unanswered', {
+			child: '/components/unanswered-child',
+		})['dd-child']
+		const app = createApp({
+			setup() {
+				provide('info', { id: 'unanswered-owner', sId: 'unanswered-scope' })
+				provide('path', '/pages/unanswered/index')
+				provide('/pages/unanswered/index', { id: 'unanswered-owner' })
+				return () => h(Suspense, null, {
+					default: () => h(UnansweredChild),
+				})
+			},
+		})
+		const root = document.createElement('div')
+		document.body.append(root)
+		app.mount(root)
+
+		await vi.waitFor(() => expect(createdMessage).toBeDefined())
+		expect(message.listenerCount(createdMessage.moduleId)).toBe(1)
+		app.unmount()
+		await vi.waitFor(() => expect(message.listenerCount(createdMessage.moduleId)).toBe(0))
+		expect(sentMessages).toContainEqual(expect.objectContaining({
+			type: 'mU',
+			body: expect.objectContaining({
+				moduleId: createdMessage.moduleId,
+				generation: createdMessage.generation,
+			}),
+		}))
+
+		window.DiminaRenderBridge.onMessage({
+			type: createdMessage.moduleId,
+			body: {
+				generation: createdMessage.generation,
+				data: { lateValue: 'must-not-apply' },
+			},
+		})
+		await Promise.resolve()
+		expect(runtime.setupData.has(createdMessage.moduleId)).toBe(false)
+		expect(runtime.initializedModules.has(createdMessage.moduleId)).toBe(false)
 	})
 
 	it('renders top-level data keys that are added after initial component data', async () => {
@@ -1184,6 +1540,79 @@ describe('runtime template components', () => {
 		runtime.instance.delete(moduleId)
 		runtime.setupData.delete(moduleId)
 		runtime.initializedModules.delete(moduleId)
+	})
+
+	it('drops stale-generation updates and cleanup after the same module id is recreated', () => {
+		const moduleId = 'reused-module-id'
+		const oldInstance = {}
+		const currentInstance = {}
+		const currentData = {}
+
+		runtime.setModuleInstance(moduleId, oldInstance, 'old-generation')
+		runtime.setModuleInstance(moduleId, currentInstance, 'current-generation')
+		runtime.setupData.set(moduleId, currentData)
+		runtime.initializedModules.add(moduleId)
+
+		expect(runtime.deleteModuleInstance(moduleId, 'old-generation')).toBe(false)
+		expect(runtime.instance.get(moduleId)).toBe(currentInstance)
+
+		expect(runtime.updateModule({
+			moduleId,
+			generation: 'old-generation',
+			data: { value: 'stale' },
+		})).toBe(false)
+		expect(currentData).toEqual({})
+
+		expect(runtime.updateModule({
+			moduleId,
+			generation: 'current-generation',
+			data: { value: 'current' },
+		})).toBe(true)
+		expect(currentData).toEqual({ value: 'current' })
+
+		// Generation-less updates remain valid for older Service runtimes.
+		expect(runtime.updateModule({
+			moduleId,
+			data: { legacy: true },
+		})).toBe(true)
+		expect(currentData).toEqual({
+			value: 'current',
+			legacy: true,
+		})
+
+		expect(runtime.deleteModuleInstance(moduleId, 'current-generation')).toBe(true)
+		runtime.setupData.delete(moduleId)
+		runtime.initializedModules.delete(moduleId)
+	})
+
+	it('creates a distinct opaque generation for each component setup', () => {
+		const first = runtime.createModuleGeneration()
+		const second = runtime.createModuleGeneration()
+
+		expect(first).toEqual(expect.any(String))
+		expect(second).toEqual(expect.any(String))
+		expect(first).not.toBe(second)
+	})
+
+	it('cancels the previous setup wait when the current generation is replaced', async () => {
+		const message = (await import('../src/core/message.js')).default
+		const moduleId = 'generation-replacement'
+		const controller = new AbortController()
+		const pendingResponse = message.wait(moduleId, {
+			generation: 'old-generation',
+			signal: controller.signal,
+		})
+
+		runtime.setModuleInstance(moduleId, {}, 'old-generation')
+		runtime.registerModuleSetupWait(moduleId, 'old-generation', controller)
+		expect(message.listenerCount(moduleId)).toBe(1)
+
+		runtime.setModuleInstance(moduleId, {}, 'new-generation')
+		await expect(pendingResponse).resolves.toBeUndefined()
+		expect(controller.signal.aborted).toBe(true)
+		expect(message.listenerCount(moduleId)).toBe(0)
+
+		runtime.deleteModuleInstance(moduleId, 'new-generation')
 	})
 })
 

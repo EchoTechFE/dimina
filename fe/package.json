@@ -21,6 +21,8 @@
     "generate:app": "node ./scripts/generate-app.js",
     "test": "pnpm --filter compiler --filter common --filter components --filter service --filter render --filter container test",
     "coverage": "pnpm --filter compiler --filter common --filter components --filter service --filter render --filter container coverage",
+    "compat:build-demos": "node ./scripts/compatibility/build-demo-matrix.mjs",
+    "compat:run-demos": "node ./scripts/compatibility/run-demo-browser-matrix.mjs",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix"
   },

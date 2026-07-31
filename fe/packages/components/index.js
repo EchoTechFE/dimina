@@ -6,6 +6,8 @@ import components from './src/index'
 export * from './src/index'
 
 const EXTERNAL_CLASS_SCOPE_ATTRIBUTE = 'data-dd-external-class-scope'
+const PROP_BINDINGS_TRANSPORT_PROP = 'diminaPropBindings'
+const WXS_MODULES_TRANSPORT_PROP = 'diminaWxsModules'
 const LEGACY_COMPONENT_TAG_ALIASES = {
 	'component-host': ['dd-wrapper'],
 }
@@ -244,4 +246,12 @@ function Components(app) {
 
 const tagWhiteList = components.map(obj => obj.__tagName)
 
-export { Components, deepToRaw, tagWhiteList, triggerEvent, useInfo }
+export {
+	Components,
+	deepToRaw,
+	PROP_BINDINGS_TRANSPORT_PROP,
+	tagWhiteList,
+	triggerEvent,
+	useInfo,
+	WXS_MODULES_TRANSPORT_PROP,
+}

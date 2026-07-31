@@ -49,11 +49,14 @@ export class Component {
 		this.__isComponent__ = module.isComponent
 		this.__type__ = module.type
 		this.__id__ = this.opts.moduleId
+		this.__generation__ = opts.generation
 		this.__info__ = module.moduleInfo
 		this.__eventAttr__ = opts.eventAttr
 		this.__eventPath__ = null
 		this.__pageId__ = opts.pageId
 		this.__parentId__ = opts.parentId
+		this.__bindingOwnerId__ = opts.bindingOwnerId || opts.pageId || opts.parentId
+		this.__propBindings__ = opts.propBindings || null
 		this.__isCustomTabBar__ = opts.isCustomTabBar === true
 		
 		// 初始化关系相关属性
@@ -71,6 +74,7 @@ export class Component {
 		// 格式：{ childModuleId: { childPropName: parentDataKey } }
 		this.__childPropsBindings__ = {}
 		this.__pendingSyncedProps__ = {}
+		this.__serviceOwnedProps__ = new Set()
 		this.__initialPropertyObserversInvoked__ = false
 		this.__initialPropertyNames__ = new Set(opts.propertyNames || Object.keys(opts.properties || {}))
 		this.__initialPropertyChanges__ = []
@@ -121,6 +125,7 @@ export class Component {
 			target: 'render',
 			body: {
 				bridgeId: this.bridgeId,
+				generation: this.__generation__,
 				path: this.is,
 				data: this.data,
 			},
@@ -134,7 +139,14 @@ export class Component {
 
 		const callbacks = this.__pendingInitSetDataCallbacks__
 		this.__pendingInitSetDataCallbacks__ = []
-		enqueueUpdate(this.bridgeId, this.__id__, {}, createUpdateCallback(this, callbacks))
+		enqueueUpdate(
+			this.bridgeId,
+			this.__id__,
+			{},
+			createUpdateCallback(this, callbacks),
+			[],
+			this.__generation__,
+		)
 	}
 
 	/**
@@ -408,19 +420,21 @@ export class Component {
 			return
 		}
 
-		// 同步更新子组件的 properties，确保与微信小程序时序一致
-		const syncedChildren = syncUpdateChildrenProps(this, runtime.instances[this.bridgeId], update.changedData)
-
 		enqueueUpdate(
 			this.bridgeId,
 			this.__id__,
 			update.changedData,
 			createUpdateCallback(this, update.callbacks),
 			update.changes,
+			this.__generation__,
 		)
 
+		// Root-first insertion keeps a nested child setData in the same tree transaction
+		// without allowing its Render patch to overtake the originating parent patch.
+		const syncedChildren = syncUpdateChildrenProps(this, runtime.instances[this.bridgeId], update.changedData)
+
 		syncedChildren.forEach(({ child, data }) => {
-			enqueueUpdate(this.bridgeId, child.__id__, data)
+			enqueueUpdate(this.bridgeId, child.__id__, data, undefined, [], child.__generation__)
 		})
 
 		// exparser runs property observers after the data observer/update phase.
@@ -517,14 +531,21 @@ export class Component {
 	 * 触发观察者函数
 	 * triggerObserver
 	 */
-	tO(data) {
+	tO(data, { source = 'render', deferredPropertyChanges } = {}) {
 		const incomingData = typeof this.normalizePropertyValues === 'function'
 			? this.normalizePropertyValues(data, { applyFilter: false })
 			: data
 		const nextData = {}
 		const appliedData = {}
 		for (const [prop, incomingValue] of Object.entries(incomingData)) {
+			if (source === 'render' && this.__serviceOwnedProps__?.has(prop)) {
+				appliedData[prop] = this.data[prop]
+				delete this.__pendingSyncedProps__?.[prop]
+				continue
+			}
 			if (
+				source === 'render'
+				&&
 				this.__pendingSyncedProps__
 				&& Object.prototype.hasOwnProperty.call(this.__pendingSyncedProps__, prop)
 				&& deepEqual(this.__pendingSyncedProps__[prop], incomingValue)
@@ -560,7 +581,12 @@ export class Component {
 		}
 
 		invokeDataObservers(this, changedPaths)
-		invokePropertyChanges(this, propertyChanges)
+		if (deferredPropertyChanges) {
+			deferredPropertyChanges.changes = propertyChanges
+		}
+		else {
+			invokePropertyChanges(this, propertyChanges)
+		}
 		return appliedData
 	}
 
@@ -729,13 +755,20 @@ export class Component {
 				this.__groupSetDataBuffer__ = {}
 				this.__groupSetDataChanges__ = []
 				this.__groupSetDataCallbacks__ = []
-				const syncedChildren = syncUpdateChildrenProps(this, runtime.instances[this.bridgeId], bufferedData)
-				
 				// 发送合并后的数据更新
-				enqueueUpdate(this.bridgeId, this.__id__, bufferedData, createUpdateCallback(this, bufferedCallbacks), bufferedChanges)
+				enqueueUpdate(
+					this.bridgeId,
+					this.__id__,
+					bufferedData,
+					createUpdateCallback(this, bufferedCallbacks),
+					bufferedChanges,
+					this.__generation__,
+				)
+
+				const syncedChildren = syncUpdateChildrenProps(this, runtime.instances[this.bridgeId], bufferedData)
 
 				syncedChildren.forEach(({ child, data }) => {
-					enqueueUpdate(this.bridgeId, child.__id__, data)
+					enqueueUpdate(this.bridgeId, child.__id__, data, undefined, [], child.__generation__)
 				})
 			}
 			else {

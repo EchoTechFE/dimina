@@ -1,0 +1,4 @@
+<view>
+	{{plain}}|{{computed}}|{{wxsValue}}|{{loopValue}}|{{index}}
+	/seen:{{seenPlain}}|{{seenComputed}}|{{seenWxsValue}}|{{seenLoopValue}}|{{seenIndex}}
+</view>
