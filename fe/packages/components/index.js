@@ -40,7 +40,11 @@ function transformAnimation(el, propertyValue) {
 	executeAnimation()
 }
 
+// 记录每个元素上 c-style 指令当前接管的 CSS 声明:每个属性名对应当前应用的值
+// (applied)和指令接管前元素原有的值(original,没有则为 null)。声明从 WXML
+// 值中消失时可归还 original,而不是直接删除。
 const directiveStyleState = new WeakMap()
+let styleProbeEl = null
 
 function snapshotStyle(style) {
 	return new Map(Array.from(style, name => [name, {
@@ -49,41 +53,68 @@ function snapshotStyle(style) {
 	}]))
 }
 
-function restoreDirectiveStyle(el) {
-	const originalDeclarations = directiveStyleState.get(el)
-	if (!originalDeclarations) return
-
-	for (const name of originalDeclarations.keys()) {
-		el.style.removeProperty(name)
-	}
-	for (const [name, declaration] of originalDeclarations) {
-		if (declaration) {
-			el.style.setProperty(name, declaration.value, declaration.priority)
-		}
-	}
-	directiveStyleState.delete(el)
+// 借助一个游离元素解析 WXML 样式字符串,复用浏览器自带的 CSS 解析器
+// (自动处理简写属性展开和 !important),而不是自己写一套解析逻辑。
+function parseCssDeclarations(cssText) {
+	if (typeof cssText !== 'string' || !cssText.trim()) return new Map()
+	styleProbeEl ??= document.createElement('div')
+	styleProbeEl.style.cssText = cssText
+	return snapshotStyle(styleProbeEl.style)
 }
 
-function transformCss(el, val) {
-	const convertedStyle = transformRpx(val)
-	if (typeof convertedStyle !== 'string' || !convertedStyle.trim()) return
+function isSameDeclaration(a, b) {
+	return a?.value === b?.value && a?.priority === b?.priority
+}
 
-	const before = snapshotStyle(el.style)
-	el.style.cssText += convertedStyle
-	const after = snapshotStyle(el.style)
-	const originalDeclarations = new Map()
-	const declarationNames = new Set([...before.keys(), ...after.keys()])
+// 只应用与指令上次实际应用值不同的声明。新旧 WXML 值之间未变化的声明完全不碰,
+// 因此不会经历短暂的"撤销态",避免被并发的布局读取(如 ScrollView 的
+// scrollTo)撞见。新值中不再出现的声明会归还给指令接管前元素原有的值,
+// 而不是直接移除。
+function applyDirectiveCss(el, val) {
+	const newDeclarations = parseCssDeclarations(transformRpx(val))
+	const owned = directiveStyleState.get(el)
+	const nextOwned = new Map()
 
-	for (const name of declarationNames) {
-		const previous = before.get(name)
-		const current = after.get(name)
-		if (previous?.value !== current?.value || previous?.priority !== current?.priority) {
-			originalDeclarations.set(name, previous || null)
+	// 先统一记录每个新接管属性名的更新前 DOM 值,再做任何写入。简写/展开属性
+	// (如 margin 和 margin-top)可能同时出现在同一份声明里,写入展开属性会
+	// 改变简写属性的读回值——如果边写边记录 original,前面的写入会污染后面
+	// 属性的基准值。
+	const priorValues = new Map()
+	for (const name of newDeclarations.keys()) {
+		if (owned?.has(name)) continue
+		const value = el.style.getPropertyValue(name)
+		const priority = el.style.getPropertyPriority(name)
+		priorValues.set(name, (value || priority) ? { value, priority } : null)
+	}
+
+	if (owned) {
+		for (const [name, record] of owned) {
+			if (newDeclarations.has(name)) continue
+			if (record.original) {
+				el.style.setProperty(name, record.original.value, record.original.priority)
+			}
+			else {
+				el.style.removeProperty(name)
+			}
 		}
 	}
 
-	if (originalDeclarations.size) {
-		directiveStyleState.set(el, originalDeclarations)
+	for (const [name, declaration] of newDeclarations) {
+		const record = owned?.get(name)
+		if (record && isSameDeclaration(record.applied, declaration)) {
+			nextOwned.set(name, record)
+			continue
+		}
+		const original = record ? record.original : priorValues.get(name)
+		el.style.setProperty(name, declaration.value, declaration.priority)
+		nextOwned.set(name, { applied: declaration, original })
+	}
+
+	if (nextOwned.size) {
+		directiveStyleState.set(el, nextOwned)
+	}
+	else {
+		directiveStyleState.delete(el)
 	}
 }
 
@@ -170,15 +201,11 @@ function removeEventBindingRecord(el, binding, vnode) {
 function Components(app) {
 	app.directive('c-style', {
 		mounted(el, binding) {
-			transformCss(el, binding.value)
-		},
-		beforeUpdate(el) {
-			// Remove only declarations owned by the previous WXML style value.
-			// Vue can then patch the component's own inline style independently.
-			restoreDirectiveStyle(el)
+			applyDirectiveCss(el, binding.value)
 		},
 		updated(el, binding) {
-			transformCss(el, binding.value)
+			if (binding.value === binding.oldValue) return
+			applyDirectiveCss(el, binding.value)
 		},
 	})
 
@@ -187,6 +214,7 @@ function Components(app) {
 			transformAnimation(el, binding.value)
 		},
 		updated(el, binding) {
+			if (binding.value === binding.oldValue) return
 			transformAnimation(el, binding.value)
 		},
 	})
